@@ -3,15 +3,28 @@ import os
 import json
 from dotenv import load_dotenv
 from .base import LLMProvider
+from google.genai import errors as genai_errors
+from fastapi import HTTPException
 
 load_dotenv()
 
+MODELOS = {
+    "gemini": "models/gemini-2.5-flash",
+    "gemini-free": "models/gemini-2.5-flash-lite"
+}
+
+LIMITES_DIARIOS = {
+    "models/gemini-2.5-flash": 1500,
+    "models/gemini-2.5-flash-lite": 1500
+}
+
 class GeminiProvider(LLMProvider):
-    
-    def __init__(self):
+
+    def __init__(self, variante: str = "gemini-free"):
         self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-        self.model = "gemini-2.0-flash"
-    
+        self.model = MODELOS.get(variante, "models/gemini-2.5-flash-lite")
+        self.tokens_consumidos_sesion = 0
+
     async def analizar_esquematico(self, imagen_bytes: bytes, mime_type: str) -> dict:
         prompt = """
         Analiza este esquemático eléctrico y extrae todos los componentes y sus conexiones.
@@ -33,21 +46,40 @@ class GeminiProvider(LLMProvider):
             ]
         }
         """
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=[
-                prompt,
-                genai.types.Part.from_bytes(data=imagen_bytes, mime_type=mime_type)
-            ]
-        )
-        texto = response.text.strip().replace("```json", "").replace("```", "")
-        return json.loads(texto)
+        try:
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=[
+                    prompt,
+                    genai.types.Part.from_bytes(data=imagen_bytes, mime_type=mime_type)
+                ]
+            )
+            tokens_esta_llamada = response.usage_metadata.total_token_count
+            self.tokens_consumidos_sesion += tokens_esta_llamada
+            texto = response.text.strip().replace("```json", "").replace("```", "")
+            return {
+                "resultado": json.loads(texto),
+                "uso": {
+                    "tokens_esta_llamada": tokens_esta_llamada,
+                    "tokens_entrada": response.usage_metadata.prompt_token_count,
+                    "tokens_salida": response.usage_metadata.candidates_token_count,
+                    "tokens_sesion": self.tokens_consumidos_sesion,
+                    "limite_diario_peticiones": LIMITES_DIARIOS.get(self.model, "desconocido"),
+                    "modelo_activo": self.model
+                }
+            }
+        except genai_errors.ClientError as e:
+            raise HTTPException(status_code=e.status_code, detail=str(e.message))
+        except genai_errors.ServerError as e:
+            raise HTTPException(status_code=503, detail="El modelo está saturado, intenta de nuevo en unos segundos.")
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=422, detail="Gemini respondió pero el JSON no es válido. Intenta con otra imagen.")
 
     async def generar_instrucciones(self, netlist: dict) -> str:
         prompt = f"""
         Dado este netlist de un circuito eléctrico:
         {json.dumps(netlist, ensure_ascii=False)}
-        
+
         Genera instrucciones paso a paso para armar el circuito en una protoboard.
         Cada instrucción debe incluir: componente, fila, columna y color de cable si aplica.
         """
