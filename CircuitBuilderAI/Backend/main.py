@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from CircuitBuilderAI.backend.providers.gemini_provider import GeminiProvider
+from providers.gemini_provider import GeminiProvider
 
 app = FastAPI(title="CircuitBuilder AI", version="1.0.0")
 
