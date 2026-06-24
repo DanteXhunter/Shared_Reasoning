@@ -16,7 +16,8 @@ CLAUDE.md
 # --------------------------------------------
 .env
 .env.*
-!.env.example          # sí permitimos subir el ejemplo plantilla
+# sí permitimos subir el ejemplo plantilla
+!.env.example
 
 # ============================================
 #  FRONTEND (Node / JavaScript / TypeScript)
@@ -76,10 +77,14 @@ htmlcov/
 # ============================================
 #  Sistema operativo / Editores
 # ============================================
-.DS_Store              # macOS
-Thumbs.db              # Windows
-.idea/                 # JetBrains (PyCharm, WebStorm)
-.vscode/               # VS Code (quita esta línea si quieres compartir config)
+# macOS
+.DS_Store
+# Windows
+Thumbs.db
+# JetBrains (PyCharm, WebStorm)
+.idea/
+# VS Code (quita esta línea si quieres compartir config)
+.vscode/
 
 # ============================================
 #  Logs generales
