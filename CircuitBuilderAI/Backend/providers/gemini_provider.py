@@ -10,16 +10,11 @@ load_dotenv()
 
 MODELOS = {
     "gemini": "models/gemini-2.5-flash",
-    "gemini-free": "models/gemini-2.5-flash-lite"
+    "gemini-free": "models/gemini-2.5-flash-lite",
 }
 
-LIMITES_DIARIOS = {
-    "models/gemini-2.5-flash": 1500,
-    "models/gemini-2.5-flash-lite": 1500
-}
 
 class GeminiProvider(LLMProvider):
-
     def __init__(self, variante: str = "gemini-free"):
         self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         self.model = MODELOS.get(variante, "models/gemini-2.5-flash-lite")
@@ -28,35 +23,53 @@ class GeminiProvider(LLMProvider):
     async def analizar_esquematico(self, imagen_bytes: bytes, mime_type: str) -> dict:
         prompt = """
         Analiza este esquemático eléctrico y extrae todos los componentes y sus conexiones.
-        Responde ÚNICAMENTE con un JSON válido con esta estructura:
+        Responde ÚNICAMENTE con un JSON válido, sin texto adicional, sin bloques de código markdown.
+
+        Estructura requerida:
         {
             "componentes": [
                 {
                     "id": "R1",
                     "tipo": "resistencia",
                     "valor": "10k",
-                    "pines": ["pin1", "pin2"]
+                    "unidad": "ohm",
+                    "propiedades": {
+                        "potencia_nominal": "0.25W",
+                        "tolerancia": "5%"
+                    },
+                    "pines": [
+                        {"nombre": "pin1", "funcion": "terminal_a"},
+                        {"nombre": "pin2", "funcion": "terminal_b"}
+                    ]
                 }
             ],
             "conexiones": [
                 {
                     "de": "R1.pin1",
-                    "a": "VCC"
+                    "a": "VCC",
+                    "descripcion": "conexión a alimentación"
                 }
             ]
         }
+
+        Reglas:
+        - Incluye TODOS los componentes visibles en el esquemático
+        - En "propiedades" incluye solo las características que puedas identificar: polaridad, voltaje máximo, corriente, potencia, tolerancia, tipo (NPN/PNP), etc.
+        - Si un valor no es visible en el esquemático, omite esa propiedad en lugar de poner null
+        - Los pines deben tener nombres específicos según el componente: base/colector/emisor para transistores, anodo/catodo para diodos y LEDs, etc.
+        - En "conexiones" describe cada conexión entre pines o hacia nodos como VCC, GND, etc.
         """
         try:
             response = self.client.models.generate_content(
                 model=self.model,
                 contents=[
                     prompt,
-                    genai.types.Part.from_bytes(data=imagen_bytes, mime_type=mime_type)
-                ]
+                    genai.types.Part.from_bytes(data=imagen_bytes, mime_type=mime_type),
+                ],
             )
             tokens_esta_llamada = response.usage_metadata.total_token_count
             self.tokens_consumidos_sesion += tokens_esta_llamada
-            texto = response.text.strip().replace("```json", "").replace("```", "")
+            texto = response.text.strip().replace("```json", "").replace("```", "").strip()
             return {
                 "resultado": json.loads(texto),
                 "uso": {
@@ -64,9 +77,8 @@ class GeminiProvider(LLMProvider):
                     "tokens_entrada": response.usage_metadata.prompt_token_count,
                     "tokens_salida": response.usage_metadata.candidates_token_count,
                     "tokens_sesion": self.tokens_consumidos_sesion,
-                    "limite_diario_peticiones": LIMITES_DIARIOS.get(self.model, "desconocido"),
-                    "modelo_activo": self.model
-                }
+                    "modelo_activo": self.model,
+                },
             }
         except genai_errors.ClientError as e:
             raise HTTPException(status_code=e.status_code, detail=str(e.message))
@@ -85,13 +97,13 @@ class GeminiProvider(LLMProvider):
         """
         response = self.client.models.generate_content(
             model=self.model,
-            contents=prompt
+            contents=prompt,
         )
         return response.text
 
     async def chat(self, mensaje: str, historial: list) -> str:
         response = self.client.models.generate_content(
             model=self.model,
-            contents=historial + [{"role": "user", "parts": [mensaje]}]
+            contents=historial + [{"role": "user", "parts": [mensaje]}],
         )
         return response.text
