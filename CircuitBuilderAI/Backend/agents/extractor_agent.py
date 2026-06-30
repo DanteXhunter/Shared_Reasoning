@@ -51,10 +51,29 @@ Reglas:
 - En "conexiones" describe cada conexión entre pines o hacia nodos como VCC, GND, etc.
 """
 
+MODELOS_LANGGRAPH = {
+    "openai": {
+        "model": "gpt-4o-mini",
+        "api_key_env": "OPENAI_API_KEY",
+        "base_url": None,
+    },
+    "nemotron": {
+        "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+        "api_key_env": "NVIDIA_API_KEY",
+        "base_url": "https://integrate.api.nvidia.com/v1",
+    },
+    "llama-vision": {
+        "model": "meta/llama-3.2-11b-vision-instruct",
+        "api_key_env": "NVIDIA_API_KEY",
+        "base_url": "https://integrate.api.nvidia.com/v1",
+    },
+}
+
 
 class EstadoExtractor(TypedDict):
     imagen_base64: str
     mime_type: str
+    proveedor: str
     intento: int
     errores: list[str]
     respuesta_raw: Optional[str]
@@ -64,50 +83,49 @@ class EstadoExtractor(TypedDict):
     tokens_salida: int
 
 
-def crear_modelo():
-    return ChatOpenAI(
-        model="gpt-4o-mini",
-        api_key=os.getenv("OPENAI_API_KEY"),
-        temperature=0,
-        max_retries=0,
-    )
+def crear_modelo(proveedor: str):
+    config = MODELOS_LANGGRAPH.get(proveedor)
+    if not config:
+        raise ValueError(
+            f"Proveedor '{proveedor}' no tiene configuración para LangGraph. "
+            f"Disponibles: {list(MODELOS_LANGGRAPH.keys())}"
+        )
+
+    params = {
+        "model": config["model"],
+        "api_key": os.getenv(config["api_key_env"]),
+        "temperature": 0,
+        "max_retries": 0,
+    }
+
+    if config["base_url"]:
+        params["base_url"] = config["base_url"]
+
+    return ChatOpenAI(**params)
 
 
 def nodo_analizar(estado: EstadoExtractor) -> dict:
-    modelo = crear_modelo()
+    modelo = crear_modelo(estado["proveedor"])
     intento = estado["intento"]
     errores = estado["errores"]
 
-    mensajes = []
+    contenido_usuario = [
+        {"type": "text", "text": PROMPT_EXTRACCION},
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:{estado['mime_type']};base64,{estado['imagen_base64']}"
+            },
+        },
+    ]
 
     if intento > 0 and errores:
-        ultimo_error = errores[-1]
-        contenido_usuario = [
-            {"type": "text", "text": PROMPT_EXTRACCION},
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:{estado['mime_type']};base64,{estado['imagen_base64']}"
-                },
-            },
-            {
-                "type": "text",
-                "text": f"\nTu respuesta anterior falló la validación con este error:\n{ultimo_error}\nCorrige el JSON y responde de nuevo."
-            },
-        ]
-    else:
-        contenido_usuario = [
-            {"type": "text", "text": PROMPT_EXTRACCION},
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:{estado['mime_type']};base64,{estado['imagen_base64']}"
-                },
-            },
-        ]
+        contenido_usuario.append({
+            "type": "text",
+            "text": f"\nTu respuesta anterior falló la validación con este error:\n{errores[-1]}\nCorrige el JSON y responde de nuevo."
+        })
 
-    mensajes.append({"role": "user", "content": contenido_usuario})
-
+    mensajes = [{"role": "user", "content": contenido_usuario}]
     respuesta = modelo.invoke(mensajes)
 
     tokens_entrada = respuesta.usage_metadata.get("input_tokens", 0) if respuesta.usage_metadata else 0
@@ -170,12 +188,32 @@ def crear_grafo_extractor():
     return grafo.compile()
 
 
-async def ejecutar_extractor(imagen_bytes: bytes, mime_type: str) -> dict:
+async def ejecutar_extractor(imagen_bytes: bytes, mime_type: str, proveedor: str) -> dict:
+    import time
+    inicio = time.time()
+
     imagen_base64 = base64.b64encode(imagen_bytes).decode("utf-8")
+
+    config = MODELOS_LANGGRAPH.get(proveedor)
+    if not config:
+        return {
+            "error": True,
+            "mensaje": f"Proveedor '{proveedor}' no soportado por el agente extractor.",
+            "errores": [f"Proveedores disponibles: {list(MODELOS_LANGGRAPH.keys())}"],
+            "uso": {
+                "tokens_entrada": 0,
+                "tokens_salida": 0,
+                "tokens_total": 0,
+                "intentos": 0,
+                "modelo_activo": "ninguno",
+                "tiempo_segundos": 0,
+            },
+        }
 
     estado_inicial = {
         "imagen_base64": imagen_base64,
         "mime_type": mime_type,
+        "proveedor": proveedor,
         "intento": 0,
         "errores": [],
         "respuesta_raw": None,
@@ -188,6 +226,9 @@ async def ejecutar_extractor(imagen_bytes: bytes, mime_type: str) -> dict:
     grafo = crear_grafo_extractor()
     estado_final = await grafo.ainvoke(estado_inicial)
 
+    modelo_activo = config["model"]
+    tiempo_total = round(time.time() - inicio, 2)
+
     if estado_final["exito"]:
         return {
             "resultado": estado_final["netlist"],
@@ -196,7 +237,8 @@ async def ejecutar_extractor(imagen_bytes: bytes, mime_type: str) -> dict:
                 "tokens_salida": estado_final["tokens_salida"],
                 "tokens_total": estado_final["tokens_entrada"] + estado_final["tokens_salida"],
                 "intentos": estado_final["intento"],
-                "modelo_activo": "gpt-4o-mini",
+                "modelo_activo": modelo_activo,
+                "tiempo_segundos": tiempo_total,
             },
         }
     else:
@@ -209,6 +251,7 @@ async def ejecutar_extractor(imagen_bytes: bytes, mime_type: str) -> dict:
                 "tokens_salida": estado_final["tokens_salida"],
                 "tokens_total": estado_final["tokens_entrada"] + estado_final["tokens_salida"],
                 "intentos": estado_final["intento"],
-                "modelo_activo": "gpt-4o-mini",
+                "modelo_activo": modelo_activo,
+                "tiempo_segundos": tiempo_total,
             },
         }
