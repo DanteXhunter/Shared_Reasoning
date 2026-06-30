@@ -1,8 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
-from providers.gemini_provider import GeminiProvider
-from providers.nvidia_provider import NvidiaProvider
-from providers.openai_provider import OpenAIProvider
+from agents.extractor_agent import ejecutar_extractor
 from metricas import Metricas, LIMITES
 import os
 from dotenv import load_dotenv
@@ -24,25 +22,6 @@ TIPOS_IMAGEN_VALIDOS = ["image/jpeg", "image/png", "image/webp", "image/tiff", "
 
 metricas = Metricas()
 
-def get_provider(proveedor: str):
-    if proveedor not in PROVEEDORES_VALIDOS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Proveedor '{proveedor}' no válido. Valores válidos: {PROVEEDORES_VALIDOS}"
-        )
-
-    if proveedor in ["gemini", "gemini-free"]:
-        return GeminiProvider(variante=proveedor)
-    elif proveedor in ["nemotron", "llama-vision"]:
-        return NvidiaProvider(variante=proveedor)
-    elif proveedor == "openai":
-        return OpenAIProvider(variante=proveedor)
-    else:
-        raise HTTPException(
-            status_code=501,
-            detail=f"Proveedor '{proveedor}' aún no tiene implementación."
-        )
-
 @app.get("/")
 async def root():
     return {
@@ -56,7 +35,11 @@ async def analizar_esquematico(
     imagen: UploadFile = File(...),
     proveedor: str = Form(...)
 ):
-    provider = get_provider(proveedor)
+    if proveedor not in PROVEEDORES_VALIDOS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Proveedor '{proveedor}' no válido. Valores válidos: {PROVEEDORES_VALIDOS}"
+        )
 
     if not metricas.puede_hacer_peticion(proveedor):
         raise HTTPException(
@@ -85,7 +68,17 @@ async def analizar_esquematico(
             detail=f"La imagen supera el límite de {mb}MB para '{proveedor}'."
         )
 
-    resultado = await provider.analizar_esquematico(contenido, imagen.content_type)
+    resultado = await ejecutar_extractor(contenido, imagen.content_type, proveedor)
+
+    if resultado.get("error"):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "mensaje": resultado["mensaje"],
+                "errores": resultado["errores"],
+                "uso": resultado["uso"],
+            }
+        )
 
     tokens_entrada = resultado.get("uso", {}).get("tokens_entrada", 0)
     tokens_salida = resultado.get("uso", {}).get("tokens_salida", 0)
