@@ -52,3 +52,38 @@ export function boardSize(): { width: number; height: number } {
     height: bottomMinusY() + 30,
   }
 }
+
+// ============================================================
+//  Traductor de coordenadas del JSON → píxeles.
+//  El LLM/planner habla en coordenadas de protoboard (strings).
+//  Esta es la ÚNICA función que el resto de la app usa para pasar
+//  de "A5" (o un riel como "+9") al punto {x, y} donde dibujar.
+//
+//  Formatos aceptados:
+//    "A5"  → hueco fila A, columna 5 (filas A-J, columnas 1..COLS)
+//    "+9"  → riel positivo superior, columna 9
+//    "-9"  → riel negativo superior, columna 9
+//  Devuelve null si el string no es una coordenada reconocible.
+// ============================================================
+export function coordToXY(coord: string): { x: number; y: number } | null {
+  const c = coord.trim().toUpperCase()
+
+  const hueco = c.match(/^([A-J])(\d+)$/)
+  if (hueco) {
+    const [, fila, col] = hueco
+    return holePos(fila, Number(col))
+  }
+
+  const riel = c.match(/^([+-])(\d+)$/)
+  if (riel) {
+    const [, signo, col] = riel
+    return { x: railHoleX(Number(col)), y: signo === '+' ? TOP_PLUS_Y : TOP_MINUS_Y }
+  }
+
+  return null
+}
+
+// True si la coordenada apunta a un hueco de la grilla principal (no riel).
+export function esHueco(coord: string): boolean {
+  return /^[A-Ja-j]\d+$/.test(coord.trim())
+}
