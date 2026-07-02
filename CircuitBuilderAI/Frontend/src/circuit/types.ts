@@ -43,8 +43,33 @@ export type ComponentePlano = {
   label: string
 }
 
-// Un cable de conexión ya resuelto en píxeles.
-export type CablePlano = { x1: number; y1: number; x2: number; y2: number }
+// Un cable de conexión ya resuelto en píxeles (color opcional).
+export type CablePlano = { x1: number; y1: number; x2: number; y2: number; color?: string }
+
+// ---- Salida del PLANNER (paso a paso con coordenadas reales) ----
+// OJO: el planner usa fila=número y columna=letra (invertido a grid.ts).
+export type PuntoPlanner = { fila: number; columna: string }
+export type PinPlanner = { nombre: string; fila: number; columna: string }
+export type CablePlanner = { color: string; desde: PuntoPlanner; hasta: PuntoPlanner }
+
+export type Instruccion = {
+  numero: number
+  tipo: string // "colocar_componente" | "conectar_cable"
+  componente_id: string | null
+  componente_tipo: string | null
+  componente_valor: string | null
+  descripcion: string
+  pines: PinPlanner[] | null
+  cable: CablePlanner | null
+}
+
+export type RespuestaPlanner = {
+  instrucciones?: Instruccion[]
+  error?: boolean
+  mensaje?: string
+  uso?: Record<string, unknown>
+  metricas?: Record<string, unknown>
+}
 
 // Un nodo (net con nombre: V_in, V_out, GND, VCC...) colocado en píxeles.
 export type NodoPlano = { x: number; y: number; label: string; color: string }
