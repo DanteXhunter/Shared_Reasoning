@@ -78,7 +78,7 @@ function Protoboard({ componentes = [], cables = [], nodos = [] }: Props) {
       <Layer>
         {/* Cables (van debajo de los componentes) */}
         {cables.map((cable, i) => (
-          <Wire key={`cable-${i}`} x1={cable.x1} y1={cable.y1} x2={cable.x2} y2={cable.y2} color="#16a34a" />
+          <Wire key={`cable-${i}`} x1={cable.x1} y1={cable.y1} x2={cable.x2} y2={cable.y2} color={cable.color ?? '#16a34a'} />
         ))}
 
         {/* Nodos (V_in, V_out, GND...): terminal de color + etiqueta */}

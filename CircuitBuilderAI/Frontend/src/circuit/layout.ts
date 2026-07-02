@@ -1,5 +1,5 @@
-import { holePos } from './grid'
-import type { Netlist, ComponentePlano, CablePlano, NodoPlano } from './types'
+import { holePos, railHoleX, ROWS, TOP_PLUS_Y, TOP_MINUS_Y } from './grid'
+import type { Netlist, ComponentePlano, CablePlano, NodoPlano, Instruccion } from './types'
 
 // ============================================================
 //  Auto-layout PROVISIONAL.
@@ -92,6 +92,85 @@ export function autoLayout(netlist: Netlist): {
 
   return { componentes, cables, nodos }
 }
+
+// ============================================================
+//  RENDER DESDE EL PLANNER (coordenadas REALES, no auto-layout).
+//  El planner habla en fila=número, columna=letra (invertido a grid.ts),
+//  así que aquí se traduce a mis coordenadas holePos(letra, número).
+// ============================================================
+
+// ¿La columna del planner es un riel de poder?
+function esRailCol(columna: string): boolean {
+  const c = columna.trim()
+  return c === '+' || c === '-'
+}
+
+// Traduce una coordenada del planner a píxeles. null si no es válida.
+function coordPlanner(fila: number, columna: string): { x: number; y: number } | null {
+  const col = columna.trim().toLowerCase()
+  if (col === '+' || col === '-') {
+    return { x: railHoleX(Math.max(1, fila)), y: col === '+' ? TOP_PLUS_Y : TOP_MINUS_Y }
+  }
+  const letra = col.toUpperCase()
+  if (!ROWS.includes(letra)) return null
+  return holePos(letra, fila) // planner: fila=número→columna mía, columna=letra→fila mía
+}
+
+// Nombre de color en español → hex.
+function colorCable(nombre: string): string {
+  const c = (nombre ?? '').toLowerCase()
+  if (c.includes('amarillo')) return '#eab308'
+  if (c.includes('negro')) return '#1f2937'
+  if (c.includes('rojo')) return '#dc2626'
+  if (c.includes('azul')) return '#2563eb'
+  if (c.includes('verde')) return '#16a34a'
+  if (c.includes('naranja')) return '#ea580c'
+  if (c.includes('blanco')) return '#e5e7eb'
+  return '#16a34a'
+}
+
+export function layoutDesdeInstrucciones(instrucciones: Instruccion[]): {
+  componentes: ComponentePlano[]
+  cables: CablePlano[]
+} {
+  const componentes: ComponentePlano[] = []
+  const cables: CablePlano[] = []
+
+  for (const ins of instrucciones) {
+    if (ins.tipo === 'colocar_componente' && ins.pines && ins.pines.length >= 2) {
+      const a = coordPlanner(ins.pines[0].fila, ins.pines[0].columna)
+      const b = coordPlanner(ins.pines[1].fila, ins.pines[1].columna)
+      if (a && b) {
+        componentes.push({
+          id: ins.componente_id ?? `C${ins.numero}`,
+          kind: normalizarTipo(ins.componente_tipo ?? ''),
+          x1: a.x, y1: a.y, x2: b.x, y2: b.y,
+          label: `${ins.componente_id ?? ''} ${ins.componente_valor ?? ''}`.trim(),
+        })
+      }
+    } else if (ins.tipo === 'conectar_cable' && ins.cable) {
+      const { desde, hasta, color } = ins.cable
+      const desdeRail = esRailCol(desde.columna)
+      const hastaRail = esRailCol(hasta.columna)
+      let a = desdeRail ? null : coordPlanner(desde.fila, desde.columna)
+      let b = hastaRail ? null : coordPlanner(hasta.fila, hasta.columna)
+      // Un extremo en riel cae vertical usando la X del otro extremo.
+      if (desdeRail) a = { x: b?.x ?? railHoleX(Math.max(1, desde.fila)), y: desde.columna.includes('+') ? TOP_PLUS_Y : TOP_MINUS_Y }
+      if (hastaRail) b = { x: a?.x ?? railHoleX(Math.max(1, hasta.fila)), y: hasta.columna.includes('+') ? TOP_PLUS_Y : TOP_MINUS_Y }
+      if (a && b) cables.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, color: colorCable(color) })
+    }
+  }
+
+  return { componentes, cables }
+}
+
+// Instrucciones de ejemplo del planner (divisor) idénticas a las de la IA.
+export const EJEMPLO_PLANNER: Instruccion[] = [
+  { numero: 1, tipo: 'colocar_componente', componente_id: 'R1', componente_tipo: 'resistencia', componente_valor: '10k', descripcion: 'Coloca R1 en fila 1, columnas b y g.', pines: [{ nombre: 'pin1', fila: 1, columna: 'b' }, { nombre: 'pin2', fila: 1, columna: 'g' }], cable: null },
+  { numero: 2, tipo: 'colocar_componente', componente_id: 'R2', componente_tipo: 'resistencia', componente_valor: '10k', descripcion: 'Coloca R2 en fila 3, columnas b y g.', pines: [{ nombre: 'pin1', fila: 3, columna: 'b' }, { nombre: 'pin2', fila: 3, columna: 'g' }], cable: null },
+  { numero: 3, tipo: 'conectar_cable', componente_id: null, componente_tipo: null, componente_valor: null, descripcion: 'Cable amarillo de R1 (1,g) a R2 (3,b).', pines: null, cable: { color: 'amarillo', desde: { fila: 1, columna: 'g' }, hasta: { fila: 3, columna: 'b' } } },
+  { numero: 4, tipo: 'conectar_cable', componente_id: null, componente_tipo: null, componente_valor: null, descripcion: 'Cable negro de R2 (3,g) al riel negativo.', pines: null, cable: { color: 'negro', desde: { fila: 3, columna: 'g' }, hasta: { fila: 0, columna: '-' } } },
+]
 
 // Netlist de ejemplo (divisor de voltaje) idéntico al que devuelve la IA.
 export const EJEMPLO_DIVISOR: Netlist = {

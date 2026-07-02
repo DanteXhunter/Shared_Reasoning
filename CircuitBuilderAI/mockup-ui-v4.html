@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<title>Paralelo — CircuitBuilder</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  /* === Tema oscuro · acento morado solo en detalles === */
+  :root {
+    --bg1:#242424; --bg2:#2E2E2E;          /* gris oscuro */
+    --accent:#A855F7; --accent-d:#9333EA;  /* morado (logo + detalles) */
+    --ink:#ECECEC; --ink-soft:#9A9A9A;     /* texto blanco / gris */
+    --border:rgba(255,255,255,.09);
+  }
+  .panel { background: rgba(255,255,255,.05); border: 1px solid var(--border); }
+  .accent-bg { background: linear-gradient(135deg, var(--accent), var(--accent-d)); }
+  .holes { background-image: radial-gradient(circle, rgba(255,255,255,.12) 1.5px, transparent 1.5px); background-size: 24px 24px; }
+
+  /* Colapsables */
+  #chat { width: 20rem; transition: width .3s ease, opacity .25s ease; }
+  #chat.min { width: 0; opacity: 0; overflow: hidden; border: none; pointer-events: none; }
+  #detalle { transition: height .3s ease; height: 11rem; overflow: hidden; }
+  #detalle.min { height: 2.5rem; }
+  #detalle.min .detalle-body { opacity: 0; }
+  .detalle-body { transition: opacity .2s ease; }
+  #btnAbrirChat { display: none; }
+  #chat.min ~ main #btnAbrirChat { display: grid; }
+  .chevron { transition: transform .3s ease; }
+  #detalle.min .chevron { transform: rotate(180deg); }
+</style>
+</head>
+<body class="h-screen overflow-hidden" style="color:var(--ink); background:linear-gradient(135deg,var(--bg1),var(--bg2))">
+
+<div class="flex h-screen">
+
+  <!-- ============ RIEL DE NAVEGACIÓN ============ -->
+  <nav class="w-14 flex flex-col items-center py-3 gap-3 shrink-0" style="border-right:1px solid var(--border)">
+    <!-- Marca: ojo de Paralelo (morado) -->
+    <div class="grid place-items-center w-10 h-10 rounded-xl accent-bg shadow-lg" title="Paralelo">
+      <svg viewBox="0 0 24 24" width="22" height="22"><ellipse cx="12" cy="12" rx="10" ry="6.5" fill="#F3EEFB"/><circle cx="12" cy="12" r="3.4" fill="#3B1D5E"/></svg>
+    </div>
+    <button onclick="toggleChat()" class="grid place-items-center w-10 h-10 rounded-xl panel hover:-translate-y-0.5 transition" title="Mostrar/ocultar chat">💬</button>
+    <button class="grid place-items-center w-10 h-10 rounded-xl panel hover:-translate-y-0.5 transition" title="Nuevo chat">＋</button>
+    <div class="flex-1"></div>
+    <button class="grid place-items-center w-10 h-10 rounded-xl panel hover:-translate-y-0.5 transition" title="Biblioteca de componentes de la sesión">🧩</button>
+    <button class="grid place-items-center w-10 h-10 rounded-xl panel hover:-translate-y-0.5 transition" title="(por definir)">❓</button>
+    <button class="grid place-items-center w-10 h-10 rounded-xl panel hover:-translate-y-0.5 transition" title="Circuito guardado">💾</button>
+  </nav>
+
+  <!-- ============ COLUMNA DE CHAT ============ -->
+  <aside id="chat" class="flex flex-col shrink-0" style="border-right:1px solid var(--border); background:rgba(255,255,255,.02)">
+    <div class="px-4 h-14 flex items-center gap-2" style="border-bottom:1px solid var(--border)">
+      <span class="w-2 h-2 rounded-full animate-pulse" style="background:var(--accent)"></span>
+      <span class="font-semibold tracking-tight flex-1">Chat</span>
+      <button onclick="toggleChat()" class="grid place-items-center w-8 h-8 rounded-lg hover:bg-white/5 transition" style="color:var(--ink-soft)" title="Minimizar chat">«</button>
+    </div>
+    <div class="flex-1 p-4 space-y-3 overflow-y-auto">
+      <div class="flex gap-2">
+        <span class="grid place-items-center w-7 h-7 rounded-full accent-bg text-white text-xs font-bold shrink-0">AI</span>
+        <div class="text-sm panel rounded-2xl rounded-tl-sm px-3 py-2 max-w-[80%]">Subí tu esquemático y empezamos con el paso 1.</div>
+      </div>
+      <div class="flex gap-2 flex-row-reverse">
+        <span class="grid place-items-center w-7 h-7 rounded-full text-xs shrink-0" style="background:#444; color:#fff">Tú</span>
+        <div class="text-sm accent-bg text-white font-medium rounded-2xl rounded-tr-sm px-3 py-2 max-w-[80%] shadow-lg">¿Dónde va R1?</div>
+      </div>
+      <div class="flex gap-2">
+        <span class="grid place-items-center w-7 h-7 rounded-full accent-bg text-white text-xs font-bold shrink-0">AI</span>
+        <div class="text-sm panel rounded-2xl rounded-tl-sm px-3 py-2 max-w-[80%]">R1 va entre A7 y G9, cruzando el canal central.</div>
+      </div>
+    </div>
+    <div class="p-3 flex gap-2" style="border-top:1px solid var(--border)">
+      <input class="flex-1 rounded-xl px-3 text-sm h-10 outline-none" style="background:rgba(255,255,255,.05); border:1px solid var(--border); color:var(--ink)" placeholder="Escribe un mensaje…" />
+      <button class="grid place-items-center w-10 h-10 rounded-xl accent-bg text-white hover:brightness-110 transition shadow-lg">➤</button>
+    </div>
+  </aside>
+
+  <!-- ============ ÁREA PRINCIPAL ============ -->
+  <main class="flex-1 flex flex-col min-w-0">
+
+    <!-- Barra superior -->
+    <header class="h-14 flex items-center gap-3 px-5" style="border-bottom:1px solid var(--border)">
+      <button id="btnAbrirChat" onclick="toggleChat()" class="place-items-center w-9 h-9 rounded-lg panel hover:-translate-y-0.5 transition" title="Mostrar chat">»</button>
+
+      <!-- Marca -->
+      <div class="flex items-center gap-2">
+        <svg viewBox="0 0 24 24" width="20" height="20"><ellipse cx="12" cy="12" rx="10" ry="6.5" fill="#F3EEFB"/><circle cx="12" cy="12" r="3.2" fill="#A855F7"/></svg>
+        <span class="text-lg font-extrabold tracking-wide" style="color:var(--accent)">PARALELO</span>
+      </div>
+
+      <span class="w-px h-6 mx-1" style="background:var(--border)"></span>
+      <input class="bg-transparent outline-none flex-1 min-w-0" style="color:var(--ink-soft)" value="Nombre del chat" />
+
+      <button class="px-3 py-1.5 rounded-lg panel hover:-translate-y-0.5 transition text-sm flex items-center gap-1.5" title="Exportar imagen del circuito">🖼️ Export</button>
+      <button class="grid place-items-center w-9 h-9 rounded-lg panel hover:-translate-y-0.5 transition" title="Cambiar colorimetría / tema">🌗</button>
+      <button class="grid place-items-center w-9 h-9 rounded-lg panel hover:-translate-y-0.5 transition" title="Ver / previsualizar">👁️</button>
+
+      <!-- Inicio de sesión -->
+      <button class="flex items-center gap-2 pl-1 pr-3 py-1 rounded-full accent-bg text-white hover:brightness-110 transition shadow-lg" title="Iniciar sesión">
+        <span class="grid place-items-center w-7 h-7 rounded-full bg-white/25 text-sm">👤</span>
+        <span class="text-sm font-medium">Entrar</span>
+      </button>
+    </header>
+
+    <!-- Protoboard -->
+    <section class="flex-1 p-5 min-h-0">
+      <div class="h-full rounded-2xl panel relative overflow-hidden" style="background:rgba(0,0,0,.25)">
+        <div class="absolute inset-0 holes opacity-60"></div>
+        <span class="absolute inset-0 grid place-items-center text-lg font-medium" style="color:var(--ink-soft)">Protoboard</span>
+        <button class="absolute top-3 right-3 grid place-items-center w-9 h-9 rounded-lg panel hover:-translate-y-0.5 transition" title="Editar / zoom">✎</button>
+      </div>
+    </section>
+
+    <!-- Navegación de paso -->
+    <div class="h-12 flex items-center gap-4 px-5 shrink-0" style="border-top:1px solid var(--border)">
+      <button class="grid place-items-center w-8 h-8 rounded-lg panel hover:-translate-y-0.5 transition">←</button>
+      <span class="text-sm font-semibold" style="color:var(--accent)">Paso 2 <span style="color:var(--ink-soft)">/ 6</span></span>
+      <div class="flex items-center gap-1.5">
+        <span class="w-2 h-2 rounded-full" style="background:var(--accent)"></span>
+        <span class="w-2 h-2 rounded-full" style="background:var(--accent)"></span>
+        <span class="w-2 h-2 rounded-full" style="background:#4a4a4a"></span>
+        <span class="w-2 h-2 rounded-full" style="background:#4a4a4a"></span>
+        <span class="w-2 h-2 rounded-full" style="background:#4a4a4a"></span>
+        <span class="w-2 h-2 rounded-full" style="background:#4a4a4a"></span>
+      </div>
+      <button class="grid place-items-center w-8 h-8 rounded-lg panel hover:-translate-y-0.5 transition">→</button>
+      <button class="ml-auto px-3 py-1.5 rounded-lg panel hover:-translate-y-0.5 transition text-sm flex items-center gap-1.5" title="Verificar con foto">📷 Verificar</button>
+    </div>
+
+    <!-- Panel de detalle -->
+    <div id="detalle" class="shrink-0" style="background:rgba(255,255,255,.02); border-top:1px solid var(--border)">
+      <div class="h-10 flex items-center justify-between px-5">
+        <span class="text-[10px] uppercase tracking-widest" style="color:var(--ink-soft)">Detalle del paso 2</span>
+        <button onclick="toggleDetalle()" class="grid place-items-center w-8 h-8 rounded-lg hover:bg-white/5 transition" style="color:var(--ink-soft)" title="Minimizar detalle">
+          <span class="chevron">⌄</span>
+        </button>
+      </div>
+      <div class="detalle-body grid grid-cols-[1fr_auto_auto] gap-5 px-5 pb-4">
+        <div>
+          <p class="text-[10px] uppercase tracking-widest mb-2" style="color:var(--ink-soft)">Instrucción</p>
+          <p class="text-sm leading-relaxed">
+            Toma la resistencia de bandas marrón-negro-naranja y colócala en la fila 2,
+            entre las columnas A y G, cruzando el canal central.
+          </p>
+        </div>
+        <div class="min-w-[140px]">
+          <p class="text-[10px] uppercase tracking-widest mb-2" style="color:var(--ink-soft)">Componente(s)</p>
+          <div class="panel rounded-xl p-3 flex flex-col items-center gap-2">
+            <svg width="110" height="34" viewBox="0 0 110 34">
+              <line x1="0" y1="17" x2="30" y2="17" stroke="#9ca3af" stroke-width="2"/>
+              <rect x="30" y="8" width="50" height="18" rx="4" fill="#d9b382" stroke="#a07d4f"/>
+              <rect x="42" y="8" width="3" height="18" fill="#7f1d1d"/>
+              <rect x="52" y="8" width="3" height="18" fill="#1e3a8a"/>
+              <rect x="62" y="8" width="3" height="18" fill="#78350f"/>
+              <line x1="80" y1="17" x2="110" y2="17" stroke="#9ca3af" stroke-width="2"/>
+            </svg>
+            <span class="text-sm font-medium">R1 · 10kΩ</span>
+          </div>
+        </div>
+        <div class="min-w-[120px]">
+          <p class="text-[10px] uppercase tracking-widest mb-2" style="color:var(--ink-soft)">Coordenadas</p>
+          <div class="panel rounded-xl p-3 flex items-center justify-center gap-2">
+            <span class="px-2.5 py-1.5 rounded-lg font-mono font-semibold" style="background:rgba(168,85,247,.15); color:#C99BF7">A7</span>
+            <span style="color:var(--ink-soft)">→</span>
+            <span class="px-2.5 py-1.5 rounded-lg font-mono font-semibold" style="background:rgba(168,85,247,.15); color:#C99BF7">G9</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+</div>
+
+<script>
+  function toggleChat() { document.getElementById('chat').classList.toggle('min') }
+  function toggleDetalle() { document.getElementById('detalle').classList.toggle('min') }
+</script>
+</body>
+</html>
