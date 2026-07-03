@@ -32,19 +32,33 @@ export type RespuestaAnalizar = {
 
 // ---- Tipos del renderizado (lo que Konva dibuja) ----
 
+// Estado visual de un item según el paso a paso:
+//  activo = el del paso actual (resaltado) · previo = ya colocado (atenuado) · normal = todo visible igual.
+export type EstadoItem = 'activo' | 'previo' | 'normal'
+
 // Un componente ya colocado en píxeles, listo para el catálogo.
 export type ComponentePlano = {
+  estado?: EstadoItem
   id: string
-  kind: 'resistor' | 'led' | 'capacitor' | 'source' | 'switch' | 'bulb' | 'generic'
+  kind:
+    | 'resistor' | 'led' | 'diode' | 'transistor' | 'capacitor' | 'electrolytic'
+    | 'inductor' | 'fuse' | 'potentiometer' | 'pushbutton' | 'ic'
+    | 'source' | 'switch' | 'bulb' | 'generic'
   x1: number
   y1: number
   x2: number
   y2: number
+  x3?: number // 3ra pata (ej. base de un transistor) — solo la usan componentes de 3 patas
+  y3?: number
   label: string
+  // Datos crudos para componentes que se auto-detallan (ej. resistor → bandas de color).
+  valor?: string
+  tolerancia?: string
+  potenciaNominal?: string
 }
 
 // Un cable de conexión ya resuelto en píxeles (color opcional).
-export type CablePlano = { x1: number; y1: number; x2: number; y2: number; color?: string }
+export type CablePlano = { x1: number; y1: number; x2: number; y2: number; color?: string; estado?: EstadoItem }
 
 // ---- Salida del PLANNER (paso a paso con coordenadas reales) ----
 // OJO: el planner usa fila=número y columna=letra (invertido a grid.ts).
@@ -73,3 +87,7 @@ export type RespuestaPlanner = {
 
 // Un nodo (net con nombre: V_in, V_out, GND, VCC...) colocado en píxeles.
 export type NodoPlano = { x: number; y: number; label: string; color: string }
+
+// Una batería/fuente FÍSICA: no va en un hueco, se dibuja al borde y
+// energiza los rieles (+ y −). El id/valor vienen del netlist.
+export type BateriaPlano = { id: string; valor?: string }

@@ -2,9 +2,10 @@ import { useState } from 'react'
 import Protoboard from './components/Protoboard'
 import JsonView from './components/JsonView'
 import InstruccionesView from './components/InstruccionesView'
+import ComponentGallery from './components/ComponentGallery'
 import { analizarEsquematico } from './api/analizar'
 import { planificarCircuito } from './api/planificar'
-import { autoLayout, layoutDesdeInstrucciones, EJEMPLO_DIVISOR, EJEMPLO_LAMPARA, EJEMPLO_PLANNER } from './circuit/layout'
+import { autoLayout, layoutDesdeInstrucciones, EJEMPLO_DIVISOR, EJEMPLO_LAMPARA, EJEMPLO_PLANNER, EJEMPLO_DIODO_TRANSISTOR } from './circuit/layout'
 import type { Netlist, Instruccion } from './circuit/types'
 
 // Proveedores que el agente extractor del backend soporta.
@@ -19,14 +20,15 @@ function App() {
   const [cargando, setCargando] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [verJson, setVerJson] = useState(false)
+  const [verBiblioteca, setVerBiblioteca] = useState(false)
 
   // Si hay instrucciones del planner, se usan sus coordenadas REALES.
   // Si no, se cae al auto-layout provisional del netlist.
-  const { componentes, cables, nodos } = instrucciones
+  const { componentes, cables, nodos, baterias } = instrucciones
     ? { ...layoutDesdeInstrucciones(instrucciones), nodos: [] }
     : netlist
       ? autoLayout(netlist)
-      : { componentes: [], cables: [], nodos: [] }
+      : { componentes: [], cables: [], nodos: [], baterias: [] }
 
   async function analizar() {
     if (!imagen) return
@@ -79,8 +81,23 @@ function App() {
           </h1>
           <p className="text-xs text-slate-500">Interfaz de prueba · analizar → planificar → graficar</p>
         </div>
+        <button
+          onClick={() => setVerBiblioteca((v) => !v)}
+          className="ml-auto px-4 py-1.5 rounded-lg glass border border-white/10 hover:border-violet-400/40 transition text-sm"
+        >
+          {verBiblioteca ? '← Volver a la prueba' : '📚 Biblioteca de componentes'}
+        </button>
       </div>
 
+      {verBiblioteca ? (
+        <div className="glass border border-white/10 rounded-2xl p-4 shadow-xl shadow-black/30">
+          <h2 className="text-sm uppercase tracking-widest text-slate-400 mb-4">
+            Biblioteca de componentes ({18} dibujos)
+          </h2>
+          <ComponentGallery />
+        </div>
+      ) : (
+      <>
       {/* Controles */}
       <div className="glass border border-white/10 rounded-2xl p-4 mb-5 shadow-xl shadow-black/30">
         <div className="flex flex-wrap items-center gap-3">
@@ -118,6 +135,7 @@ function App() {
           <button onClick={() => { setError(null); setInstrucciones(null); setNetlist(EJEMPLO_DIVISOR) }} className={ejemploClass}>Divisor</button>
           <button onClick={() => { setError(null); setInstrucciones(null); setNetlist(EJEMPLO_LAMPARA) }} className={ejemploClass}>Lámpara</button>
           <button onClick={() => { setError(null); setNetlist(null); setInstrucciones(EJEMPLO_PLANNER) }} className={`${ejemploClass} text-emerald-300`}>Planner (coords reales)</button>
+          <button onClick={() => { setError(null); setNetlist(null); setInstrucciones(EJEMPLO_DIODO_TRANSISTOR) }} className={`${ejemploClass} text-amber-300`}>Diodo + Transistor</button>
         </div>
       </div>
 
@@ -138,7 +156,7 @@ function App() {
               </span>
             )}
           </div>
-          <Protoboard componentes={componentes} cables={cables} nodos={nodos} />
+          <Protoboard componentes={componentes} cables={cables} nodos={nodos} baterias={baterias} />
         </div>
 
         {/* JSON crudo (netlist o instrucciones del planner) */}
@@ -168,6 +186,8 @@ function App() {
           </div>
         )}
       </div>
+      </>
+      )}
     </div>
   )
 }
