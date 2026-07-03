@@ -8,7 +8,8 @@ export const SPACING = 22          // distancia entre huecos (px)
 export const HOLE_R = 5            // radio de cada hueco
 export const COLS = 30            // número de columnas
 export const ROWS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'] // filas
-export const MARGIN_X = 50         // margen izquierdo (letras de fila)
+export const MARGIN_X = 96         // margen izquierdo (letras de fila + gutter para la batería física)
+export const GUTTER_BATERIA = 60   // ancho reservado a la izquierda para dibujar la batería y sus cables a los rieles
 export const MARGIN_Y = 84         // donde empieza la fila A (deja espacio a rieles + números)
 export const GAP = SPACING * 1.5   // canal central que parte la protoboard
 
