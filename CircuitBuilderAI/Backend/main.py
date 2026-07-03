@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-app = FastAPI(title="CircuitBuilder AI", version="1.0.0")
+app = FastAPI(title="Paralelo", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,7 +29,7 @@ metricas = Metricas()
 @app.get("/")
 async def root():
     return {
-        "mensaje": "CircuitBuilder AI backend corriendo",
+        "mensaje": "Paralelo backend corriendo",
         "version": "1.0.0",
         "metricas": {proveedor: metricas.resumen(proveedor) for proveedor in PROVEEDORES_VALIDOS}
     }
