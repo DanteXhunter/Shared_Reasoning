@@ -1,5 +1,23 @@
 import { holePos, railHoleX, ROWS, TOP_PLUS_Y, TOP_MINUS_Y } from './grid'
-import type { Netlist, ComponentePlano, CablePlano, NodoPlano, Instruccion } from './types'
+import type { Netlist, ComponentePlano, CablePlano, NodoPlano, Instruccion, BateriaPlano } from './types'
+
+// Punto de conexión a los rieles de poder (columna 2, cerca del borde izq).
+const RAIL_PLUS = { x: railHoleX(2), y: TOP_PLUS_Y }
+const RAIL_MINUS = { x: railHoleX(2), y: TOP_MINUS_Y }
+
+// ¿Un pin de la fuente es el positivo? (por su función o nombre)
+function esPinPositivo(texto: string): boolean {
+  const t = texto.toLowerCase()
+  return t.includes('vcc') || t.includes('pos') || t.includes('+') || t.includes('vin') || t.includes('v_in')
+}
+
+// ¿Un nombre de nodo es un riel de poder? Devuelve el punto del riel o null.
+function railDeNodo(nombre: string): { x: number; y: number } | null {
+  const u = nombre.trim().toUpperCase()
+  if (u === '+' || u === 'VCC' || u.includes('VIN') || u.includes('V_IN') || u === 'V+') return RAIL_PLUS
+  if (u === '-' || u === 'GND' || u === 'V-' || u === 'TIERRA') return RAIL_MINUS
+  return null
+}
 
 // ============================================================
 //  Auto-layout PROVISIONAL.
@@ -16,10 +34,18 @@ import type { Netlist, ComponentePlano, CablePlano, NodoPlano, Instruccion } fro
 function normalizarTipo(tipo: string): ComponentePlano['kind'] {
   const t = tipo.toLowerCase()
   if (t.includes('resist')) return 'resistor'
-  if (t.includes('led') || t.includes('diodo')) return 'led'
+  if (t.includes('led')) return 'led' // OJO: chequear 'led' ANTES que 'diodo' — un LED también es técnicamente un diodo
+  if (t.includes('diodo') || t.includes('diode')) return 'diode'
+  if (t.includes('transistor') || t.includes('bjt') || t.includes('npn') || t.includes('pnp')) return 'transistor'
+  if (t.includes('potenci') || t.includes('trimmer')) return 'potentiometer'
+  if (t.includes('electrolit') || t.includes('electrolyt')) return 'electrolytic'
   if (t.includes('capacit') || t.includes('condensador')) return 'capacitor'
+  if (t.includes('inductor') || t.includes('bobina')) return 'inductor'
+  if (t.includes('fusible') || t.includes('fuse')) return 'fuse'
+  if (t.includes('integrado') || t.includes('chip') || /\bic\b/.test(t) || /\b555\b/.test(t) || t.includes('amp op') || t.includes('opamp')) return 'ic'
+  if (t.includes('pulsador') || t.includes('push') || t.includes('boton')) return 'pushbutton'
   if (t.includes('fuente') || t.includes('generador') || t.includes('bateria') || t.includes('pila')) return 'source'
-  if (t.includes('interruptor') || t.includes('switch') || t.includes('boton')) return 'switch'
+  if (t.includes('interruptor') || t.includes('switch')) return 'switch'
   if (t.includes('carga') || t.includes('bombilla') || t.includes('lampara') || t.includes('foco') || t.includes('luz')) return 'bulb'
   return 'generic'
 }
@@ -43,35 +69,62 @@ export function autoLayout(netlist: Netlist): {
   componentes: ComponentePlano[]
   cables: CablePlano[]
   nodos: NodoPlano[]
+  baterias: BateriaPlano[]
 } {
   const componentes: ComponentePlano[] = []
+  const baterias: BateriaPlano[] = []
   const mapaPines = new Map<string, { x: number; y: number }>()
 
-  netlist.componentes.forEach((comp, i) => {
-    const fila = FILAS[Math.floor(i / COMPONENTES_POR_FILA) % FILAS.length]
-    const col = COL_INICIAL + (i % COMPONENTES_POR_FILA) * SEPARACION_COL
+  let iGrid = 0 // índice SOLO de componentes que van al tablero (las fuentes no cuentan)
+  netlist.componentes.forEach((comp) => {
+    const kind = normalizarTipo(comp.tipo)
+
+    // Las fuentes NO se colocan en un hueco: se vuelven batería al borde y
+    // sus pines apuntan a los rieles (+ / −). Así todo lo que conecte a la
+    // fuente se enruta al riel, que es como funciona físicamente.
+    if (kind === 'source') {
+      baterias.push({ id: comp.id, valor: comp.valor })
+      comp.pines.forEach((p) => {
+        const positivo = esPinPositivo(`${p.funcion} ${p.nombre}`)
+        mapaPines.set(`${comp.id}.${p.nombre}`, positivo ? RAIL_PLUS : RAIL_MINUS)
+      })
+      return
+    }
+
+    const fila = FILAS[Math.floor(iGrid / COMPONENTES_POR_FILA) % FILAS.length]
+    const col = COL_INICIAL + (iGrid % COMPONENTES_POR_FILA) * SEPARACION_COL
+    iGrid++
     const a = holePos(fila, col)
     const b = holePos(fila, col + ANCHO_COMPONENTE)
 
+    const props = comp.propiedades as Record<string, unknown> | null | undefined
     componentes.push({
       id: comp.id,
-      kind: normalizarTipo(comp.tipo),
+      kind,
       x1: a.x, y1: a.y, x2: b.x, y2: b.y,
       label: `${comp.id} ${comp.valor}${comp.unidad ?? ''}`.trim(),
+      valor: comp.valor,
+      tolerancia: typeof props?.tolerancia === 'string' ? props.tolerancia.replace('%', '') : undefined,
+      potenciaNominal: typeof props?.potencia_nominal === 'string' ? props.potencia_nominal : undefined,
     })
 
     if (comp.pines[0]) mapaPines.set(`${comp.id}.${comp.pines[0].nombre}`, a)
     if (comp.pines[1]) mapaPines.set(`${comp.id}.${comp.pines[1].nombre}`, b)
   })
 
-  // Ubica cualquier extremo de conexión: si es pin de componente usa su hueco;
-  // si es un nodo con nombre, le asigna (una sola vez) una terminal en la fila superior.
+  // Ubica cualquier extremo de conexión:
+  //  1) pin de componente → su hueco
+  //  2) nodo de poder (VCC/GND/+/−) → el riel correspondiente
+  //  3) otro nodo con nombre (V_out...) → terminal etiquetada en la fila superior
   const mapaNodos = new Map<string, { x: number; y: number }>()
   const nodos: NodoPlano[] = []
 
   function ubicar(extremo: string): { x: number; y: number } {
     const pin = mapaPines.get(extremo)
     if (pin) return pin
+
+    const riel = railDeNodo(extremo)
+    if (riel) return riel
 
     const existente = mapaNodos.get(extremo)
     if (existente) return existente
@@ -83,14 +136,13 @@ export function autoLayout(netlist: Netlist): {
     return pos
   }
 
-  // Ahora TODAS las conexiones se dibujan (pin↔pin, pin↔nodo, nodo↔nodo).
   const cables: CablePlano[] = netlist.conexiones.map((con) => {
     const desde = ubicar(con.de)
     const hasta = ubicar(con.a)
     return { x1: desde.x, y1: desde.y, x2: hasta.x, y2: hasta.y }
   })
 
-  return { componentes, cables, nodos }
+  return { componentes, cables, nodos, baterias }
 }
 
 // ============================================================
@@ -132,20 +184,33 @@ function colorCable(nombre: string): string {
 export function layoutDesdeInstrucciones(instrucciones: Instruccion[]): {
   componentes: ComponentePlano[]
   cables: CablePlano[]
+  baterias: BateriaPlano[]
 } {
   const componentes: ComponentePlano[] = []
   const cables: CablePlano[] = []
+  const baterias: BateriaPlano[] = []
 
   for (const ins of instrucciones) {
     if (ins.tipo === 'colocar_componente' && ins.pines && ins.pines.length >= 2) {
+      const kind = normalizarTipo(ins.componente_tipo ?? '')
+      // La fuente no se dibuja en el tablero: es batería al borde.
+      if (kind === 'source') {
+        baterias.push({ id: ins.componente_id ?? `F${ins.numero}`, valor: ins.componente_valor ?? undefined })
+        continue
+      }
       const a = coordPlanner(ins.pines[0].fila, ins.pines[0].columna)
       const b = coordPlanner(ins.pines[1].fila, ins.pines[1].columna)
+      // Componentes de 3 patas (ej. transistor): la 3ra pata es opcional en el
+      // JSON del planner — si no viene, el propio componente la aproxima.
+      const c = kind === 'transistor' && ins.pines[2] ? coordPlanner(ins.pines[2].fila, ins.pines[2].columna) : null
       if (a && b) {
         componentes.push({
           id: ins.componente_id ?? `C${ins.numero}`,
-          kind: normalizarTipo(ins.componente_tipo ?? ''),
+          kind,
           x1: a.x, y1: a.y, x2: b.x, y2: b.y,
+          x3: c?.x, y3: c?.y,
           label: `${ins.componente_id ?? ''} ${ins.componente_valor ?? ''}`.trim(),
+          valor: ins.componente_valor ?? undefined,
         })
       }
     } else if (ins.tipo === 'conectar_cable' && ins.cable) {
@@ -161,7 +226,7 @@ export function layoutDesdeInstrucciones(instrucciones: Instruccion[]): {
     }
   }
 
-  return { componentes, cables }
+  return { componentes, cables, baterias }
 }
 
 // Instrucciones de ejemplo del planner (divisor) idénticas a las de la IA.
@@ -170,6 +235,13 @@ export const EJEMPLO_PLANNER: Instruccion[] = [
   { numero: 2, tipo: 'colocar_componente', componente_id: 'R2', componente_tipo: 'resistencia', componente_valor: '10k', descripcion: 'Coloca R2 en fila 3, columnas b y g.', pines: [{ nombre: 'pin1', fila: 3, columna: 'b' }, { nombre: 'pin2', fila: 3, columna: 'g' }], cable: null },
   { numero: 3, tipo: 'conectar_cable', componente_id: null, componente_tipo: null, componente_valor: null, descripcion: 'Cable amarillo de R1 (1,g) a R2 (3,b).', pines: null, cable: { color: 'amarillo', desde: { fila: 1, columna: 'g' }, hasta: { fila: 3, columna: 'b' } } },
   { numero: 4, tipo: 'conectar_cable', componente_id: null, componente_tipo: null, componente_valor: null, descripcion: 'Cable negro de R2 (3,g) al riel negativo.', pines: null, cable: { color: 'negro', desde: { fila: 3, columna: 'g' }, hasta: { fila: 0, columna: '-' } } },
+]
+
+// Instrucciones de ejemplo: diodo + transistor BJT (prueba de los
+// componentes de 2 y 3 patas más recientes del catálogo).
+export const EJEMPLO_DIODO_TRANSISTOR: Instruccion[] = [
+  { numero: 1, tipo: 'colocar_componente', componente_id: 'D1', componente_tipo: 'diodo', componente_valor: '1N4007', descripcion: 'Coloca D1 en fila 2, columnas b y f.', pines: [{ nombre: 'anodo', fila: 2, columna: 'b' }, { nombre: 'catodo', fila: 2, columna: 'f' }], cable: null },
+  { numero: 2, tipo: 'colocar_componente', componente_id: 'Q1', componente_tipo: 'transistor', componente_valor: '2N2222', descripcion: 'Coloca Q1 (NPN) en fila 5, con emisor en b, base en d y colector en f.', pines: [{ nombre: 'emisor', fila: 5, columna: 'b' }, { nombre: 'colector', fila: 5, columna: 'f' }, { nombre: 'base', fila: 5, columna: 'd' }], cable: null },
 ]
 
 // Netlist de ejemplo (divisor de voltaje) idéntico al que devuelve la IA.
