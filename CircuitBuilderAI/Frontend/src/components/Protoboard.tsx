@@ -1,5 +1,7 @@
-import { Fragment, type ReactNode } from 'react'
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Stage, Layer, Group, Rect, Circle, Text, Line } from 'react-konva'
+import type Konva from 'konva'
+import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react'
 import {
   ROWS, COLS, SPACING, MARGIN_X, MARGIN_Y,
   TOP_PLUS_Y, TOP_MINUS_Y, rowY, railHoleX, bottomPlusY, bottomMinusY, boardSize,
@@ -32,19 +34,21 @@ import type { ComponentePlano, CablePlano, NodoPlano, BateriaPlano, EstadoItem }
 // ---- Revelado progresivo (issue #23) ----
 // previo = ya colocado (atenuado) · activo = paso actual (resaltado) · normal = sin efecto.
 const OPACIDAD_PREVIO = 0.35
-const ACCENT = '#A855F7' // morado — marca los huecos del paso activo
+const ACCENT_FALLBACK = '#A855F7' // por si el CSS var aún no resolvió (primer frame)
 
 function opacidadDe(estado?: EstadoItem): number {
   return estado === 'previo' ? OPACIDAD_PREVIO : 1
 }
 
 // Anillo sobre un hueco: señala dónde va el componente del paso activo.
-function MarcadorActivo({ x, y }: { x: number; y: number }) {
+// El color viene del tema (día/noche) — ver `acento` en Protoboard, resuelto
+// desde la variable CSS --accent porque Konva/canvas no entiende var(...).
+function MarcadorActivo({ x, y, color }: { x: number; y: number; color: string }) {
   return (
     <Circle
       x={x} y={y} radius={9}
-      stroke={ACCENT} strokeWidth={2.5}
-      shadowColor={ACCENT} shadowBlur={10} shadowOpacity={0.9}
+      stroke={color} strokeWidth={2.5}
+      shadowColor={color} shadowBlur={10} shadowOpacity={0.9}
       listening={false} perfectDrawEnabled={false}
     />
   )
@@ -212,8 +216,84 @@ type Props = {
   escala?: number
 }
 
+// Zoom nativo de Konva (independiente del zoom del navegador): rueda del
+// mouse hace zoom centrado en el cursor, y arrastrar el fondo hace pan.
+// El Stage llena TODO el contenedor (no solo el tamaño del tablero) para que
+// al hacer zoom haya espacio de sobra antes de recortar el borde del board.
+const ZOOM_MIN = 0.5
+const ZOOM_MAX = 4
+const ZOOM_STEP = 1.4
+
+function clamp(v: number, lo: number, hi: number) {
+  return Math.min(hi, Math.max(lo, v))
+}
+
 function Protoboard({ componentes = [], cables = [], nodos = [], baterias = [], escala = 1 }: Props) {
   const { width, height } = boardSize()
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const stageRef = useRef<Konva.Stage>(null)
+  const [stageSize, setStageSize] = useState({ width: width * escala, height: height * escala })
+  const [zoom, setZoom] = useState(1)
+  const [pos, setPos] = useState({ x: 0, y: 0 })
+  const [acento, setAcento] = useState(ACCENT_FALLBACK)
+  const escalaEfectiva = escala * zoom
+
+  // Resuelve el color de acento del TEMA ACTIVO (día/noche) desde la
+  // variable CSS --accent. Konva dibuja en <canvas>, que no entiende
+  // "var(--accent)" como valor de color — hay que leer el valor calculado
+  // de un elemento del DOM (que sí cae dentro del data-theme del provider).
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const valor = getComputedStyle(el).getPropertyValue('--accent').trim()
+    if (valor) setAcento(valor)
+  }, [])
+
+  // El Stage mide el contenedor completo (no el tablero) — así el zoom tiene
+  // margen real antes de tocar el borde del canvas.
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const ajustar = () => setStageSize({ width: el.clientWidth, height: el.clientHeight })
+    ajustar()
+    const ro = new ResizeObserver(ajustar)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  // Si cambia el ajuste automático o el tamaño del contenedor (ej. al
+  // redimensionar el chat), se resetea el zoom manual y se recentra el board.
+  useEffect(() => {
+    setZoom(1)
+    setPos({ x: (stageSize.width - width * escala) / 2, y: (stageSize.height - height * escala) / 2 })
+  }, [escala, stageSize.width, stageSize.height, width, height])
+
+  // Aplica un factor de zoom manteniendo fijo el punto (centro del viewport
+  // por defecto, o el cursor cuando viene de la rueda del mouse).
+  function zoomHacia(factor: number, centro?: { x: number; y: number }) {
+    const c = centro ?? { x: stageSize.width / 2, y: stageSize.height / 2 }
+    const puntoLogico = { x: (c.x - pos.x) / escalaEfectiva, y: (c.y - pos.y) / escalaEfectiva }
+    const nuevoZoom = clamp(zoom * factor, ZOOM_MIN, ZOOM_MAX)
+    const nuevaEscala = escala * nuevoZoom
+    setZoom(nuevoZoom)
+    setPos({ x: c.x - puntoLogico.x * nuevaEscala, y: c.y - puntoLogico.y * nuevaEscala })
+  }
+
+  function onWheel(e: Konva.KonvaEventObject<WheelEvent>) {
+    e.evt.preventDefault()
+    const pointer = stageRef.current?.getPointerPosition()
+    if (!pointer) return
+    // Sensibilidad más alta (antes se sentía muy lento con mouse/trackpad estándar).
+    const factor = Math.exp(-e.evt.deltaY * 0.004)
+    zoomHacia(factor, pointer)
+  }
+
+  function resetVista() {
+    setZoom(1)
+    setPos({ x: (stageSize.width - width * escala) / 2, y: (stageSize.height - height * escala) / 2 })
+  }
+
+  const botonZoomStyle = { background: 'var(--bg2)', border: '1px solid var(--border)', color: 'var(--ink-soft)' }
 
   // Límites verticales de las 3 tiras (derivados del grid, no mágicos).
   const tiraTop = { y0: 6, y1: TOP_MINUS_Y + 14 }
@@ -225,7 +305,16 @@ function Protoboard({ componentes = [], cables = [], nodos = [], baterias = [], 
   const canalY1 = rowY(5) - 12
 
   return (
-    <Stage width={width * escala} height={height * escala} scaleX={escala} scaleY={escala}>
+    <div ref={wrapRef} style={{ position: 'relative', width: '100%', height: '100%' }}>
+    <Stage
+      ref={stageRef}
+      width={stageSize.width} height={stageSize.height}
+      scaleX={escalaEfectiva} scaleY={escalaEfectiva}
+      x={pos.x} y={pos.y}
+      draggable
+      onDragEnd={(e) => setPos({ x: e.target.x(), y: e.target.y() })}
+      onWheel={onWheel}
+    >
       {/* CAPA 1: la protoboard (fija, no interactiva) */}
       <Layer listening={false}>
         {/* Cuerpo plástico en 3 tiras (riel superior · bloque central · riel inferior) */}
@@ -287,8 +376,8 @@ function Protoboard({ componentes = [], cables = [], nodos = [], baterias = [], 
           <Group key={`cable-${i}`} opacity={opacidadDe(cable.estado)}>
             {cable.estado === 'activo' && (
               <>
-                <MarcadorActivo x={cable.x1} y={cable.y1} />
-                <MarcadorActivo x={cable.x2} y={cable.y2} />
+                <MarcadorActivo x={cable.x1} y={cable.y1} color={acento} />
+                <MarcadorActivo x={cable.x2} y={cable.y2} color={acento} />
               </>
             )}
             <Wire x1={cable.x1} y1={cable.y1} x2={cable.x2} y2={cable.y2} color={cable.color ?? '#16a34a'} />
@@ -306,18 +395,8 @@ function Protoboard({ componentes = [], cables = [], nodos = [], baterias = [], 
         {/* Componentes: dibujo del catálogo, orientado según sus pines
             (ComponenteOrientado los rota para que se vean como en la Biblioteca) */}
         {componentes.map((comp) => {
-          const labelX = (comp.x1 + comp.x2) / 2 - comp.label.length * 3
-          const labelY = Math.min(comp.y1, comp.y2) - 24
           return (
             <Group key={comp.id} opacity={opacidadDe(comp.estado)}>
-              {/* Paso activo: anillos en los huecos donde van las patas */}
-              {comp.estado === 'activo' && (
-                <>
-                  <MarcadorActivo x={comp.x1} y={comp.y1} />
-                  <MarcadorActivo x={comp.x2} y={comp.y2} />
-                  {comp.x3 !== undefined && comp.y3 !== undefined && <MarcadorActivo x={comp.x3} y={comp.y3} />}
-                </>
-              )}
               {comp.kind === 'ic' ? (
                 // El IC no usa el patrón de patas: se dibuja como caja con pines.
                 <IC x={Math.min(comp.x1, comp.x2)} y={Math.min(comp.y1, comp.y2) - 18} width={Math.abs(comp.x2 - comp.x1) || 60} label={comp.id} />
@@ -351,12 +430,38 @@ function Protoboard({ componentes = [], cables = [], nodos = [], baterias = [], 
                   }
                 </ComponenteOrientado>
               )}
-              <Text x={labelX} y={labelY} text={comp.label} fontSize={10} fill={comp.estado === 'activo' ? ACCENT : '#6d28d9'} fontStyle="bold" />
+              {/* Sin etiqueta flotante sobre el componente (issue: se solapaba
+                  con las bandas del resistor) — el id/valor ya se muestra en
+                  la Instrucción y en el panel "Componentes". */}
+              {/* Paso activo: anillos en los huecos donde van las patas —
+                  se dibujan DESPUÉS del componente (encima) para que nunca
+                  queden tapados por su cuerpo (ej. la pata del medio de un
+                  transistor/potenciómetro/regulador, justo bajo el cuerpo). */}
+              {comp.estado === 'activo' && (
+                <>
+                  <MarcadorActivo x={comp.x1} y={comp.y1} color={acento} />
+                  <MarcadorActivo x={comp.x2} y={comp.y2} color={acento} />
+                  {comp.x3 !== undefined && comp.y3 !== undefined && <MarcadorActivo x={comp.x3} y={comp.y3} color={acento} />}
+                </>
+              )}
             </Group>
           )
         })}
       </Layer>
     </Stage>
+    {/* Controles de zoom nativo de Konva (no el zoom del navegador) */}
+    <div className="absolute bottom-2 right-2 flex flex-col gap-1 z-10">
+      <button onClick={() => zoomHacia(ZOOM_STEP)} className="grid place-items-center w-7 h-7 rounded-md shadow" style={botonZoomStyle} title="Acercar">
+        <ZoomIn size={14} />
+      </button>
+      <button onClick={() => zoomHacia(1 / ZOOM_STEP)} className="grid place-items-center w-7 h-7 rounded-md shadow" style={botonZoomStyle} title="Alejar">
+        <ZoomOut size={14} />
+      </button>
+      <button onClick={resetVista} className="grid place-items-center w-7 h-7 rounded-md shadow" style={botonZoomStyle} title="Restablecer vista">
+        <RotateCcw size={14} />
+      </button>
+    </div>
+    </div>
   )
 }
 

@@ -29,6 +29,8 @@ import Motor from '../circuit/components/Motor'
 
 // Galería que renderiza TODOS los componentes del catálogo en un solo lugar.
 // Sirve como referencia visual y como banco de pruebas rápido de cada dibujo.
+// Respeta el tema día/noche del resto de la UI vía variables CSS (--bg1,
+// --bg2, --ink, --ink-soft, --border, --accent — ver ui/theme.tsx).
 
 const W = 210
 const H = 110
@@ -45,16 +47,19 @@ type ItemProps = { nombre: string; sub?: string; children: ReactNode }
 
 function Celda({ nombre, sub, children }: ItemProps) {
   return (
-    <div className="glass border border-white/10 rounded-xl p-2 flex flex-col items-center shadow-lg shadow-black/20">
+    <div
+      className="rounded-xl p-2 flex flex-col items-center shadow-sm"
+      style={{ background: 'var(--bg2)', border: '1px solid var(--border)' }}
+    >
       <Stage width={W} height={H}>
         <Layer>
-          {/* fondo tipo protoboard para contexto */}
+          {/* fondo tipo protoboard para contexto — neutro en ambos temas */}
           <Rect x={0} y={0} width={W} height={H} cornerRadius={8} fill="#e7e5e0" />
           {children}
         </Layer>
       </Stage>
-      <p className="mt-1 text-sm font-medium text-slate-200">{nombre}</p>
-      {sub && <p className="text-[10px] text-slate-500">{sub}</p>}
+      <p className="mt-1 text-sm font-medium" style={{ color: 'var(--ink)' }}>{nombre}</p>
+      {sub && <p className="text-[10px]" style={{ color: 'var(--ink-soft)' }}>{sub}</p>}
     </div>
   )
 }
@@ -85,14 +90,15 @@ function ResistorPlayground() {
   ]
 
   return (
-    <div className="glass border border-white/10 rounded-xl p-4 mb-6 shadow-lg shadow-black/20">
+    <div className="rounded-xl p-4 mb-6 shadow-sm" style={{ background: 'var(--bg2)', border: '1px solid var(--border)' }}>
       <div className="flex items-center justify-between mb-3">
-        <p className="text-xs text-slate-400">
-          Resistor — <b>una sola plantilla</b>. Cambia el valor o la tolerancia y las bandas se recalculan solas.
+        <p className="text-xs" style={{ color: 'var(--ink-soft)' }}>
+          Resistor — <b style={{ color: 'var(--ink)' }}>una sola plantilla</b>. Cambia el valor o la tolerancia y las bandas se recalculan solas.
         </p>
         <button
           onClick={() => setAbierto((a) => !a)}
-          className="text-xs px-3 py-1.5 rounded-lg bg-violet-600/80 hover:bg-violet-600 transition"
+          className="text-xs px-3 py-1.5 rounded-lg transition hover:opacity-90"
+          style={{ background: 'var(--accent)', color: 'var(--bg2)' }}
         >
           {abierto ? '✕ Cerrar editor' : '✏️ Abrir editor'}
         </button>
@@ -107,8 +113,8 @@ function ResistorPlayground() {
               <Resistor x1={45} y1={62} x2={195} y2={62} valor={valor} tolerancia={tolerancia} />
             </Layer>
           </Stage>
-          <p className="mt-1 text-lg font-bold text-violet-300">{formatOhm(ohmios)}</p>
-          <p className="text-[11px] text-slate-400 text-center">
+          <p className="mt-1 text-lg font-bold" style={{ color: 'var(--accent)' }}>{formatOhm(ohmios)}</p>
+          <p className="text-[11px] text-center" style={{ color: 'var(--ink-soft)' }}>
             {bandas.length} bandas · {nombres.join(' · ')}
           </p>
         </div>
@@ -116,28 +122,33 @@ function ResistorPlayground() {
         {/* Editor (se abre/cierra) */}
         {abierto && (
           <div className="flex flex-col gap-3 min-w-[220px]">
-            <label className="text-xs text-slate-400">
+            <label className="text-xs" style={{ color: 'var(--ink-soft)' }}>
               Valor (ej. 10k, 4k7, 220, 1M)
               <input
                 value={valor}
                 onChange={(e) => setValor(e.target.value)}
-                className="mt-1 w-full bg-slate-800/70 border border-white/10 focus:border-violet-400/50 outline-none rounded-lg px-3 py-1.5 text-sm text-slate-100"
+                className="mt-1 w-full outline-none rounded-lg px-3 py-1.5 text-sm"
+                style={{ background: 'var(--bg1)', border: '1px solid var(--border)', color: 'var(--ink)' }}
               />
             </label>
-            <label className="text-xs text-slate-400">
+            <label className="text-xs" style={{ color: 'var(--ink-soft)' }}>
               Tolerancia
               <select
                 value={tolerancia}
                 onChange={(e) => setTolerancia(e.target.value)}
-                className="mt-1 w-full bg-slate-800/70 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-slate-100"
+                className="mt-1 w-full rounded-lg px-3 py-1.5 text-sm"
+                style={{ background: 'var(--bg1)', border: '1px solid var(--border)', color: 'var(--ink)' }}
               >
                 {tolerancias.map((t) => <option key={t.v} value={t.v}>{t.l}</option>)}
               </select>
             </label>
             <div className="flex flex-wrap gap-1">
               {['1', '220', '4k7', '10k', '470k', '1M', '4k75'].map((v) => (
-                <button key={v} onClick={() => setValor(v)}
-                  className="text-[11px] px-2 py-1 rounded bg-slate-700/60 hover:bg-slate-600 transition">
+                <button
+                  key={v} onClick={() => setValor(v)}
+                  className="text-[11px] px-2 py-1 rounded transition hover:opacity-80"
+                  style={{ background: 'var(--bg1)', border: '1px solid var(--border)', color: 'var(--ink)' }}
+                >
                   {v}
                 </button>
               ))}
@@ -154,7 +165,7 @@ function ComponentGallery() {
     <div>
       <ResistorPlayground />
 
-      <p className="text-xs text-slate-400 mb-2">Resto del catálogo:</p>
+      <p className="text-xs mb-2" style={{ color: 'var(--ink-soft)' }}>Resto del catálogo:</p>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
       <Celda nombre="LED" sub="diodo emisor"><LED {...dosPatas} /></Celda>
       <Celda nombre="Diodo" sub="rectificador"><Diode {...dosPatas} /></Celda>

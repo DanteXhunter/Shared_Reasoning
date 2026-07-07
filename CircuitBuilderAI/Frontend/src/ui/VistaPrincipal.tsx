@@ -1,17 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  FilePlus2, History, ChevronsLeft, ChevronsRight, ArrowLeft, ArrowRight,
-  Eye, EyeOff, Code, User, CircuitBoard, LayoutGrid, ChevronDown, X,
+  FilePlus2, History, PanelLeft, ArrowLeft, ArrowRight,
+  Eye, EyeOff, Code, User, LayoutGrid, ChevronDown, X,
 } from 'lucide-react'
 import Protoboard from '../components/Protoboard'
 import ComponentGallery from '../components/ComponentGallery'
 import ChatPanel, { type Mensaje } from './ChatPanel'
 import TemaProvider from './theme'
 import { LogoWordmark } from './Logo'
-import { layoutDesdeInstrucciones } from '../circuit/layout'
+import { layoutDesdeInstrucciones, normalizarTipo, colorCable } from '../circuit/layout'
+import MiniComponente, { MiniCable } from '../components/MiniComponente'
 import { calcularBandas } from '../circuit/resistorColorCode'
 import { boardSize } from '../circuit/grid'
 import type { Sesion } from './tipos'
+import type { Instruccion } from '../circuit/types'
+import { sesionSensorLuz } from './ejemploSensorLuz'
+import { sesionVitrinaComponentes } from './ejemploVitrina'
 
 type Props = {
   sesion: Sesion
@@ -22,7 +26,19 @@ type Props = {
 }
 
 const NOMBRE_NIVEL: Record<Sesion['nivel'], string> = { basico: 'Básico', intermedio: 'Intermedio', experto: 'Experto' }
-const CHATS_PREVIOS = ['Divisor de voltaje', 'Semáforo con 555', 'Sensor de luz LDR']
+// Límites del ancho arrastrable de la columna de chat (issue: chat responsivo).
+const ANCHO_CHAT_MIN = 280
+const ANCHO_CHAT_DEFAULT = 320
+const RIEL_W = 56 // w-14
+const PANEL_DERECHO_W = 384 // w-96
+const PROTOBOARD_MIN = 360 // ancho mínimo del área central para que siga siendo legible
+// Historial demo: 'sesion' carga un chat de prueba real; null = cascarón (issue #88).
+const CHATS_PREVIOS: { nombre: string; cargar: (() => Sesion) | null }[] = [
+  { nombre: 'Sensor de luz nocturna', cargar: sesionSensorLuz },
+  { nombre: 'Vitrina de componentes (QA)', cargar: sesionVitrinaComponentes },
+  { nombre: 'Divisor de voltaje', cargar: null },
+  { nombre: 'Semáforo con 555', cargar: null },
+]
 
 // "B3" legible desde la coordenada del planner (fila=número, columna=letra).
 function coordTexto(fila: number, columna: string): string {
@@ -47,6 +63,11 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion }: Props) {
   const [revelado, setRevelado] = useState(true)
   const [tab, setTab] = useState<'simulacion' | 'esquema' | 'codigo'>('simulacion')
   const [chatAbierto, setChatAbierto] = useState(true)
+  // Ancho arrastrable de la columna de chat (issue: chat responsivo).
+  const [anchoChat, setAnchoChat] = useState(ANCHO_CHAT_DEFAULT)
+  const asideRef = useRef<HTMLDivElement>(null)
+  const arrastrandoRef = useRef(false)
+  const [arrastrando, setArrastrando] = useState(false)
   // La columna alterna entre la conversación actual y el historial de chats.
   const [vistaChats, setVistaChats] = useState<'conversacion' | 'historial'>('conversacion')
   const [verComponentes, setVerComponentes] = useState(true)
@@ -73,26 +94,38 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion }: Props) {
     [sesion.instrucciones, revelado, paso],
   )
 
-  // Componentes ya colocados hasta el paso actual, para la lista "Componentes".
-  const componentesColocados = useMemo(
-    () =>
-      sesion.instrucciones
-        .filter((i) => i.tipo === 'colocar_componente' && i.numero <= paso)
-        .map((i) => {
-          const esResistor = /resist/i.test(i.componente_tipo ?? '')
-          let detalle = i.componente_tipo ?? ''
-          if (esResistor && i.componente_valor) {
-            try {
-              detalle = calcularBandas(i.componente_valor).map((b) => b.nombre).join(' - ')
-              detalle = detalle.charAt(0).toUpperCase() + detalle.slice(1)
-            } catch {
-              detalle = i.componente_tipo ?? ''
-            }
-          }
-          return { id: i.componente_id ?? `C${i.numero}`, valor: i.componente_valor, detalle }
-        }),
-    [sesion.instrucciones, paso],
-  )
+// Convierte una instrucción "colocar_componente" a la forma que usa la
+  // tarjeta (bandas de color calculadas para resistores, kind del catálogo).
+  function comoTarjeta(i: Instruccion) {
+    const esResistor = /resist/i.test(i.componente_tipo ?? '')
+    let detalle = i.componente_tipo ?? ''
+    if (esResistor && i.componente_valor) {
+      try {
+        detalle = calcularBandas(i.componente_valor).map((b) => b.nombre).join(' - ')
+        detalle = detalle.charAt(0).toUpperCase() + detalle.slice(1)
+      } catch {
+        detalle = i.componente_tipo ?? ''
+      }
+    }
+    return {
+      id: i.componente_id ?? `C${i.numero}`,
+      valor: i.componente_valor,
+      detalle,
+      kind: normalizarTipo(i.componente_tipo ?? ''),
+    }
+  }
+
+  // Componente del PASO ANTERIOR (no el actual, no todo el historial): el
+  // último "colocar_componente" antes del paso activo — la tarjeta de
+  // arriba ("Componente(s)") ya muestra el del paso actual, esta lista es
+  // referencia de lo que se acaba de colocar justo antes.
+  const componentesColocados = useMemo(() => {
+    if (!instruccionActiva) return []
+    const anterior = [...sesion.instrucciones]
+      .filter((i) => i.tipo === 'colocar_componente' && i.numero < instruccionActiva.numero)
+      .sort((a, b) => b.numero - a.numero)[0]
+    return anterior ? [comoTarjeta(anterior)] : []
+  }, [sesion.instrucciones, instruccionActiva])
 
   // Escala del tablero para encajar en su contenedor.
   const contRef = useRef<HTMLDivElement>(null)
@@ -107,6 +140,33 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion }: Props) {
     const ro = new ResizeObserver(ajustar)
     ro.observe(el)
     return () => ro.disconnect()
+  }, [])
+
+  // Arrastre del borde derecho de la columna de chat: la agranda hacia la
+  // derecha hasta un máximo que sigue dejando espacio legible a la protoboard.
+  function iniciarArrastre(e: React.MouseEvent) {
+    e.preventDefault()
+    arrastrandoRef.current = true
+    setArrastrando(true)
+  }
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      if (!arrastrandoRef.current || !asideRef.current) return
+      const izquierda = asideRef.current.getBoundingClientRect().left
+      const anchoMax = Math.min(720, window.innerWidth - RIEL_W - PANEL_DERECHO_W - PROTOBOARD_MIN)
+      const propuesto = e.clientX - izquierda
+      setAnchoChat(Math.max(ANCHO_CHAT_MIN, Math.min(propuesto, Math.max(ANCHO_CHAT_MIN, anchoMax))))
+    }
+    function onUp() {
+      arrastrandoRef.current = false
+      setArrastrando(false)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
   }, [])
 
   // Navegación de pasos con el teclado (← →), salvo al escribir en un input.
@@ -154,11 +214,20 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion }: Props) {
       <div className="flex flex-1 min-h-0">
         {/* ============ RIEL IZQUIERDO (siempre visible) ============ */}
         <div className="w-14 shrink-0 flex flex-col items-center py-4 gap-2" style={{ borderRight: chatAbierto ? 'none' : '1px solid var(--border)' }}>
-          {/* 1º: nuevo archivo/circuito */}
+          {/* 1º: abrir/cerrar la columna de chat */}
+          <button
+            onClick={() => setChatAbierto((a) => !a)}
+            className="grid place-items-center w-9 h-9 rounded-lg hover:bg-black/5 transition"
+            style={chatAbierto ? { background: 'color-mix(in srgb, var(--accent) 20%, transparent)' } : { color: 'var(--accent)' }}
+            title={chatAbierto ? 'Minimizar chat' : 'Abrir chat'}
+          >
+            <PanelLeft size={18} />
+          </button>
+          {/* 2º: nuevo archivo/circuito */}
           <button onClick={onNuevo} className="grid place-items-center w-9 h-9 rounded-lg hover:bg-black/5 transition" title="Nuevo circuito">
             <FilePlus2 size={18} />
           </button>
-          {/* 2º: historial de chats */}
+          {/* 3º: historial de chats */}
           <button
             onClick={() => {
               setChatAbierto(true)
@@ -170,52 +239,36 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion }: Props) {
           >
             <History size={18} />
           </button>
-          {/* Pista visual para reabrir cuando está minimizado */}
-          {!chatAbierto && (
-            <button
-              onClick={() => setChatAbierto(true)}
-              className="mt-2 grid place-items-center w-9 h-9 rounded-lg hover:bg-black/5 transition"
-              style={{ color: 'var(--accent)' }}
-              title="Abrir chat"
-            >
-              <ChevronsRight size={18} />
-            </button>
-          )}
         </div>
 
-        {/* ============ COLUMNA: CHATS + CONVERSACIÓN (colapsable) ============ */}
+        {/* ============ COLUMNA: CHATS + CONVERSACIÓN (colapsable y redimensionable) ============ */}
         <aside
-          className="shrink-0 flex flex-col gap-3 overflow-hidden transition-all duration-300"
+          ref={asideRef}
+          className={`shrink-0 flex flex-col gap-3 overflow-hidden relative ${arrastrando ? '' : 'transition-all duration-300'}`}
           style={{
-            width: chatAbierto ? '20rem' : 0,
+            width: chatAbierto ? `${anchoChat}px` : 0,
             opacity: chatAbierto ? 1 : 0,
             padding: chatAbierto ? '1rem' : 0,
             borderRight: chatAbierto ? '1px solid var(--border)' : 'none',
             pointerEvents: chatAbierto ? 'auto' : 'none',
           }}
         >
+          {/* Manija de arrastre — agranda/achica la columna hacia la derecha */}
+          {chatAbierto && (
+            <div
+              onMouseDown={iniciarArrastre}
+              className="absolute top-0 right-0 h-full w-1.5 cursor-col-resize z-10 hover:bg-black/10 transition"
+              style={arrastrando ? { background: 'color-mix(in srgb, var(--accent) 40%, transparent)' } : undefined}
+              title="Arrastra para redimensionar el chat"
+            />
+          )}
           {/* Encabezado: nombre del chat actual + minimizar (el historial vive en el riel ☰) */}
           <div className="flex items-center gap-2 shrink-0 h-8">
-            {vistaChats === 'historial' && (
-              <button
-                onClick={() => setVistaChats('conversacion')}
-                className="grid place-items-center w-8 h-8 rounded-lg hover:bg-black/5 transition shrink-0"
-                title="Volver a la conversación"
-              >
-                <ArrowLeft size={16} />
-              </button>
-            )}
+            
             <span className="text-sm font-semibold truncate">
               {vistaChats === 'historial' ? 'Historial de chats' : sesion.nombre}
             </span>
-            <button
-              onClick={() => setChatAbierto(false)}
-              className="ml-auto grid place-items-center w-8 h-8 rounded-lg hover:bg-black/5 transition shrink-0"
-              style={{ color: 'var(--ink-soft)' }}
-              title="Minimizar chat"
-            >
-              <ChevronsLeft size={16} />
-            </button>
+            
           </div>
 
           {vistaChats === 'historial' ? (
@@ -228,9 +281,14 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion }: Props) {
               >
                 {sesion.nombre}
               </button>
-              {CHATS_PREVIOS.map((c) => (
-                <button key={c} className="w-full text-left text-sm px-3 py-2 rounded-xl truncate transition hover:bg-black/5" style={{ color: 'var(--ink-soft)' }}>
-                  {c}
+              {CHATS_PREVIOS.filter((c) => c.nombre !== sesion.nombre).map((c) => (
+                <button
+                  key={c.nombre}
+                  onClick={c.cargar ? () => onCargarSesion(c.cargar!()) : undefined}
+                  className="w-full text-left text-sm px-3 py-2 rounded-xl truncate transition hover:bg-black/5"
+                  style={{ color: 'var(--ink-soft)', cursor: c.cargar ? 'pointer' : 'default' }}
+                >
+                  {c.nombre}
                 </button>
               ))}
             </div>
@@ -322,23 +380,38 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion }: Props) {
                 <p className="text-sm leading-relaxed text-center">{instruccionActiva.descripcion}</p>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                {instruccionActiva.componente_id && (
-                  <div>
+              <div className="grid grid-cols-2 gap-4 items-stretch">
+                {instruccionActiva.componente_id ? (
+                  <div className="flex flex-col">
                     <p className="text-[10px] uppercase tracking-widest mb-2 text-center" style={{ color: 'var(--ink-soft)' }}>Componente(s)</p>
-                    <div className="rounded-xl p-3 flex flex-col items-center gap-1" style={{ background: 'var(--bg1)' }}>
-                      <CircuitBoard size={26} style={{ color: 'var(--accent)' }} />
+                    <div className="rounded-xl p-3 flex-1 min-h-[124px] flex flex-col items-center justify-center gap-1" style={{ background: 'var(--bg1)' }}>
+                      <MiniComponente
+                        kind={normalizarTipo(instruccionActiva.componente_tipo ?? '')}
+                        valor={instruccionActiva.componente_valor ?? undefined}
+                      />
                       <span className="text-sm font-semibold">
                         {instruccionActiva.componente_id}
                         {instruccionActiva.componente_valor ? ` ${instruccionActiva.componente_valor}` : ''}
                       </span>
                     </div>
                   </div>
-                )}
+                ) : instruccionActiva.tipo === 'conectar_cable' && instruccionActiva.cable ? (
+                  // El jumper también es un componente (§7.B): en este paso hay
+                  // que saber qué color de cable tomar, no solo a dónde va.
+                  <div className="flex flex-col">
+                    <p className="text-[10px] uppercase tracking-widest mb-2 text-center" style={{ color: 'var(--ink-soft)' }}>Componente(s)</p>
+                    <div className="rounded-xl p-3 flex-1 min-h-[124px] flex flex-col items-center justify-center gap-1" style={{ background: 'var(--bg1)' }}>
+                      <MiniCable color={colorCable(instruccionActiva.cable.color)} />
+                      <span className="text-sm font-semibold capitalize">
+                        Jumper {instruccionActiva.cable.color}
+                      </span>
+                    </div>
+                  </div>
+                ) : null}
 
-                <div>
+                <div className="flex flex-col">
                   <p className="text-[10px] uppercase tracking-widest mb-2 text-center" style={{ color: 'var(--ink-soft)' }}>Coordenadas</p>
-                  <div className="rounded-xl p-3 flex items-center justify-center gap-2 flex-wrap" style={{ background: 'var(--bg1)' }}>
+                  <div className="rounded-xl p-3 flex-1 min-h-[124px] flex items-center justify-center gap-2 flex-wrap" style={{ background: 'var(--bg1)' }}>
                     {(instruccionActiva.pines ?? (instruccionActiva.cable ? [instruccionActiva.cable.desde, instruccionActiva.cable.hasta] : []))
                       .map((p, i, arr) => (
                         <span key={i} className="flex items-center gap-1.5">
@@ -354,20 +427,22 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion }: Props) {
             </>
           )}
 
-          {/* Componentes ya colocados */}
+          {/* Componente del paso anterior (referencia — no todo el historial) */}
           <div className="mt-auto">
             <button
               onClick={() => setVerComponentes((v) => !v)}
               className="w-full flex items-center gap-2 text-sm font-semibold py-2"
             >
               <ChevronDown size={16} className="transition-transform" style={{ transform: verComponentes ? 'none' : 'rotate(-90deg)' }} />
-              Componentes
+              Paso anterior
             </button>
             {verComponentes && (
               <div className="space-y-2">
                 {componentesColocados.map((c, i) => (
                   <div key={`${c.id}-${i}`} className="rounded-xl p-3 flex items-center gap-3" style={{ background: 'var(--bg1)' }}>
-                    <CircuitBoard size={20} className="shrink-0" style={{ color: 'var(--accent)' }} />
+                    <div className="shrink-0">
+                      <MiniComponente kind={c.kind} valor={c.valor ?? undefined} />
+                    </div>
                     <div className="min-w-0">
                       <p className="text-sm font-semibold truncate">
                         {c.id}{c.valor ? ` · ${c.valor}` : ''}
