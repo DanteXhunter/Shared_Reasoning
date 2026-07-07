@@ -3,7 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from agents.extractor_agent import ejecutar_extractor
 from agents.planner_agent import ejecutar_planner
-from agents.estado import ModoInteraccion
+from agents.chat_agent_v2 import ejecutar_chat_agent_v2
+from agents.estado import ModoInteraccion, MensajeChat
 from metricas import Metricas, LIMITES
 import json
 import os
@@ -277,5 +278,111 @@ async def procesar_esquematico(
             "uso_planner": resultado_planner["uso"],
             "metricas": metricas.resumen(proveedor),
         })
+
+    return StreamingResponse(generador(), media_type="text/event-stream")
+
+
+NIVEL_A_MODO = {
+    "basico": ModoInteraccion.UNDER,
+    "intermedio": ModoInteraccion.ALONG,
+    "experto": ModoInteraccion.OVER,
+}
+
+
+@app.post("/chat")
+async def chat(
+    netlist: str = Form(...),
+    historial: str = Form(...),
+    proveedor: str = Form(default="openai"),
+    nivel: str = Form(default="intermedio"),
+    instrucciones: str = Form(default="[]"),
+):
+    if proveedor not in PROVEEDORES_VALIDOS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Proveedor '{proveedor}' no válido. Valores válidos: {PROVEEDORES_VALIDOS}"
+        )
+
+    if nivel not in NIVEL_A_MODO:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Nivel '{nivel}' no válido. Valores válidos: {list(NIVEL_A_MODO)}"
+        )
+
+    try:
+        netlist_dict = json.loads(netlist)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="El campo 'netlist' no es un JSON válido.")
+
+    try:
+        historial_list: list[MensajeChat] = json.loads(historial)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="El campo 'historial' no es un JSON válido.")
+
+    try:
+        instrucciones_list = json.loads(instrucciones)
+    except json.JSONDecodeError:
+        instrucciones_list = []
+
+    modo = NIVEL_A_MODO[nivel]
+
+    estado = {
+        "imagen_base64": "",
+        "mime_type": "",
+        "proveedor": proveedor,
+        "modo_interaccion": modo,
+        "historial_chat": historial_list,
+        "extractor_intento": 0,
+        "extractor_errores": [],
+        "extractor_respuesta_raw": None,
+        "extractor_netlist": netlist_dict,
+        "extractor_exito": True,
+        "extractor_tokens_entrada": 0,
+        "extractor_tokens_salida": 0,
+        "extractor_tiempo": 0.0,
+        "planner_intento": 0,
+        "planner_errores": [],
+        "planner_respuesta_raw": None,
+        "planner_instrucciones": instrucciones_list or None,
+        "planner_exito": bool(instrucciones_list),
+        "planner_tokens_entrada": 0,
+        "planner_tokens_salida": 0,
+        "planner_tiempo": 0.0,
+        "planner_posiciones_override": None,
+    }
+
+    async def generador():
+        yield _evento_sse("estado", {"mensaje": "Analizando tu mensaje..."})
+
+        resultado = await ejecutar_chat_agent_v2(estado)
+
+        if resultado.get("error"):
+            yield _evento_sse("error", {
+                "mensaje": resultado["mensaje"],
+                "intencion_detectada": resultado.get("intencion_detectada"),
+            })
+            return
+
+        intencion = resultado.get("intencion_detectada", "responder")
+
+        if intencion == "responder":
+            yield _evento_sse("respuesta", {
+                "contenido": resultado.get("respuesta", ""),
+                "intencion_detectada": intencion,
+                "uso": resultado.get("uso", {}),
+            })
+        else:
+            tokens_entrada = resultado.get("uso", {}).get("tokens_entrada", 0)
+            tokens_salida = resultado.get("uso", {}).get("tokens_salida", 0)
+            metricas.registrar(tokens_entrada, tokens_salida, proveedor)
+
+            yield _evento_sse("actualizado", {
+                "respuesta": resultado.get("respuesta", ""),
+                "intencion_detectada": intencion,
+                "instrucciones_actualizadas": resultado.get("instrucciones_actualizadas"),
+                "netlist_modificado": resultado.get("netlist_modificado"),
+                "posiciones_modificadas": resultado.get("posiciones_modificadas"),
+                "uso": resultado.get("uso", {}),
+            })
 
     return StreamingResponse(generador(), media_type="text/event-stream")
