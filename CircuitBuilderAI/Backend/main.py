@@ -1,6 +1,7 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
 from agents.extractor_agent import ejecutar_extractor
 from agents.planner_agent import ejecutar_planner
 from agents.chat_agent_v2 import ejecutar_chat_agent_v2
@@ -28,6 +29,16 @@ PROVEEDORES_VALIDOS = list(LIMITES.keys())
 TIPOS_IMAGEN_VALIDOS = ["image/jpeg", "image/png", "image/webp", "image/tiff", "image/heic"]
 
 metricas = Metricas()
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    campos = []
+    for error in exc.errors():
+        ubicacion = " → ".join(str(p) for p in error["loc"] if p != "body")
+        campos.append(f"{ubicacion}: {error['msg']}")
+    mensaje = "Faltan campos obligatorios o tienen formato incorrecto: " + "; ".join(campos)
+    return JSONResponse(status_code=422, content={"detail": mensaje})
 
 
 def _evento_sse(tipo: str, data: dict) -> str:
