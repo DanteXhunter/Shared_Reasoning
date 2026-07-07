@@ -45,10 +45,21 @@ Estructura requerida:
 
 Reglas:
 - Incluye TODOS los componentes visibles en el esquemático
+- SIEMPRE incluye la fuente de alimentación como componente (batería, fuente DC, regulador de voltaje, etc.) aunque esté representada solo como un símbolo. Usa id "BAT1", "V1" o similar según corresponda.
+- En "conexiones" SIEMPRE incluye las conexiones al polo positivo (VCC) y al polo negativo/tierra (GND) de cada componente que las tenga. Sin estas conexiones el circuito no funciona.
+- VCC representa el polo positivo de la fuente. GND representa el polo negativo o tierra.
 - En "propiedades" incluye solo las características que puedas identificar: polaridad, voltaje máximo, corriente, potencia, tolerancia, tipo (NPN/PNP), etc.
-- Si un valor no es visible en el esquemático, omite esa propiedad en lugar de poner null
-- Los pines deben tener nombres específicos según el componente: base/colector/emisor para transistores, anodo/catodo para diodos y LEDs, etc.
-- En "conexiones" describe cada conexión entre pines o hacia nodos como VCC, GND, etc.
+- Si "propiedades" no es visible en el esquemático, omite ese campo en lugar de poner null
+- Los campos "valor" y "unidad" son SIEMPRE obligatorios. Si el valor no es legible en el esquemático (por ejemplo un interruptor, un conector, o una fuente sin etiqueta), usa "valor": "N/A" y "unidad": "N/A".
+- Los pines deben tener nombres específicos según el componente: base/colector/emisor para transistores, anodo/catodo para diodos y LEDs, plus/minus para fuentes, etc.
+- En "conexiones" describe TODAS las conexiones entre pines y hacia nodos de alimentación como VCC y GND
+
+Antes de responder, verifica mentalmente:
+[ ] ¿Incluí la fuente de alimentación como componente?
+[ ] ¿Hay al menos una conexión hacia VCC y al menos una hacia GND?
+[ ] ¿Cada componente que necesita corriente tiene sus conexiones de alimentación?
+[ ] ¿Ningún pin visible en el esquemático quedó sin conexión?
+[ ] ¿El JSON es válido y tiene la estructura exacta requerida?
 """
 
 MODELOS_LANGGRAPH = {
@@ -139,6 +150,60 @@ def nodo_analizar(estado: EstadoExtractor) -> dict:
     }
 
 
+NODOS_POSITIVOS = {"VCC", "+V", "V+", "ALIMENTACION", "PWR"}
+NODOS_NEGATIVOS = {"GND", "GRD", "TIERRA", "0V", "VSS"}
+
+TIPOS_FUENTE = {"fuente", "batería", "bateria", "battery", "voltaje", "voltage",
+                "power", "alimentacion", "suministro", "regulador", "supply", "pila"}
+PINES_POSITIVOS = {"plus", "positivo", "positive", "anodo", "anode", "vcc", "pos"}
+PINES_NEGATIVOS = {"minus", "negativo", "negative", "catodo", "cathode", "gnd",
+                   "neg", "tierra", "ground"}
+
+
+def _normalizar_poder(netlist: dict) -> dict:
+    """
+    Garantiza que el netlist siempre tenga conexiones a VCC y GND.
+    Estrategia:
+      1. Si ya existen → no hace nada.
+      2. Si hay un componente de fuente → conecta sus pines a VCC/GND.
+      3. Si no hay fuente → inyecta un BAT1 genérico (9V) y lo conecta.
+    """
+    conexiones: list = netlist.get("conexiones", [])
+    componentes: list = netlist.get("componentes", [])
+
+    nodos = {c["de"].upper() for c in conexiones} | {c["a"].upper() for c in conexiones}
+    tiene_vcc = bool(nodos & NODOS_POSITIVOS)
+    tiene_gnd = bool(nodos & NODOS_NEGATIVOS)
+
+    if tiene_vcc and tiene_gnd:
+        return netlist
+
+    # Intentar conectar la fuente ya existente en el netlist
+    fuente = next(
+        (c for c in componentes if any(k in c.get("tipo", "").lower() for k in TIPOS_FUENTE)),
+        None,
+    )
+
+    if fuente:
+        comp_id = fuente["id"]
+        for pin in fuente.get("pines", []):
+            pin_lower = pin["nombre"].lower()
+            if not tiene_vcc and any(k in pin_lower for k in PINES_POSITIVOS):
+                conexiones.append({"de": f"{comp_id}.{pin['nombre']}", "a": "VCC", "descripcion": "conexión al polo positivo"})
+                tiene_vcc = True
+            elif not tiene_gnd and any(k in pin_lower for k in PINES_NEGATIVOS):
+                conexiones.append({"de": f"{comp_id}.{pin['nombre']}", "a": "GND", "descripcion": "conexión al polo negativo"})
+                tiene_gnd = True
+
+    # Si aún faltan rieles, no inyectamos un componente ficticio.
+    # El planner siempre agrega un paso inicial que le indica al usuario
+    # conectar su fuente de alimentación a los rieles manualmente.
+
+    netlist["componentes"] = componentes
+    netlist["conexiones"] = conexiones
+    return netlist
+
+
 def nodo_validar(estado: EstadoExtractor) -> dict:
     texto_raw = estado["respuesta_raw"] or ""
     texto = texto_raw.strip().replace("```json", "").replace("```", "").strip()
@@ -153,10 +218,6 @@ def nodo_validar(estado: EstadoExtractor) -> dict:
 
     try:
         netlist = Netlist(**datos)
-        return {
-            "netlist": netlist.model_dump(),
-            "exito": True,
-        }
     except ValidationError as e:
         errores_legibles = "; ".join(
             f"{err['loc']}: {err['msg']}" for err in e.errors()
@@ -165,6 +226,27 @@ def nodo_validar(estado: EstadoExtractor) -> dict:
             "errores": estado["errores"] + [f"Estructura inválida: {errores_legibles}"],
             "exito": False,
         }
+
+    netlist_dict = netlist.model_dump()
+
+    if not netlist_dict.get("componentes"):
+        return {
+            "errores": estado["errores"] + ["El netlist no contiene ningún componente. Extrae todos los componentes visibles en el esquemático."],
+            "exito": False,
+        }
+
+    if not netlist_dict.get("conexiones"):
+        return {
+            "errores": estado["errores"] + ["El netlist no contiene ninguna conexión. Describe todas las conexiones entre componentes."],
+            "exito": False,
+        }
+
+    netlist_dict = _normalizar_poder(netlist_dict)
+
+    return {
+        "netlist": netlist_dict,
+        "exito": True,
+    }
 
 
 def decidir_siguiente(estado: EstadoExtractor) -> str:
