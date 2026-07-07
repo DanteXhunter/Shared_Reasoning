@@ -14,7 +14,7 @@ Clasifica la intención del mensaje en UNA de estas tres categorías:
 - "modificar_posiciones": el usuario propone mover un componente físicamente en el protoboard sin cambiar su conexión eléctrica
 
 Responde ÚNICAMENTE con el JSON:
-{"intencion": "<categoria>"}
+{{"intencion": "<categoria>"}}
 
 Mensaje del usuario: {mensaje}
 """
