@@ -14,7 +14,9 @@ app = FastAPI(title="CircuitBuilder AI", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    # En dev, Vite salta de puerto (5173, 5174, …) si el anterior está ocupado,
+    # así que aceptamos cualquier puerto de localhost/127.0.0.1 en lugar de fijar uno.
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

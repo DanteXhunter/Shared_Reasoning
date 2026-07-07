@@ -1,7 +1,7 @@
-import { Fragment } from 'react'
-import { Stage, Layer, Rect, Circle, Text, Line } from 'react-konva'
+import { Fragment, type ReactNode } from 'react'
+import { Stage, Layer, Group, Rect, Circle, Text, Line } from 'react-konva'
 import {
-  ROWS, COLS, SPACING, HOLE_R, MARGIN_X, MARGIN_Y,
+  ROWS, COLS, SPACING, MARGIN_X, MARGIN_Y,
   TOP_PLUS_Y, TOP_MINUS_Y, rowY, railHoleX, bottomPlusY, bottomMinusY, boardSize,
 } from '../circuit/grid'
 import Resistor from '../circuit/components/Resistor'
@@ -20,12 +20,82 @@ import Generic from '../circuit/components/Generic'
 import Source from '../circuit/components/Source'
 import Switch from '../circuit/components/Switch'
 import Bulb from '../circuit/components/Bulb'
-import type { ComponentePlano, CablePlano, NodoPlano, BateriaPlano } from '../circuit/types'
+import Photoresistor from '../circuit/components/Photoresistor'
+import Buzzer from '../circuit/components/Buzzer'
+import VoltageRegulator from '../circuit/components/VoltageRegulator'
+import Crystal from '../circuit/components/Crystal'
+import SevenSegment from '../circuit/components/SevenSegment'
+import Relay from '../circuit/components/Relay'
+import Motor from '../circuit/components/Motor'
+import type { ComponentePlano, CablePlano, NodoPlano, BateriaPlano, EstadoItem } from '../circuit/types'
+
+// ---- Revelado progresivo (issue #23) ----
+// previo = ya colocado (atenuado) · activo = paso actual (resaltado) · normal = sin efecto.
+const OPACIDAD_PREVIO = 0.35
+const ACCENT = '#A855F7' // morado — marca los huecos del paso activo
+
+function opacidadDe(estado?: EstadoItem): number {
+  return estado === 'previo' ? OPACIDAD_PREVIO : 1
+}
+
+// Anillo sobre un hueco: señala dónde va el componente del paso activo.
+function MarcadorActivo({ x, y }: { x: number; y: number }) {
+  return (
+    <Circle
+      x={x} y={y} radius={9}
+      stroke={ACCENT} strokeWidth={2.5}
+      shadowColor={ACCENT} shadowBlur={10} shadowOpacity={0.9}
+      listening={false} perfectDrawEnabled={false}
+    />
+  )
+}
+
+// ============================================================
+//  ORIENTACIÓN: los dibujos del catálogo están hechos en
+//  horizontal (asumen y1 === y2). Este wrapper los lleva a un
+//  marco local horizontal y rota el grupo entero, para que un
+//  componente colocado en vertical/diagonal se vea EXACTAMENTE
+//  igual que en la Biblioteca (cuerpo, bandas, gradientes).
+// ============================================================
+function ComponenteOrientado({ comp, children }: {
+  comp: ComponentePlano
+  children: (local: ComponentePlano) => ReactNode
+}) {
+  const cx = (comp.x1 + comp.x2) / 2
+  const cy = (comp.y1 + comp.y2) / 2
+  const dx = comp.x2 - comp.x1
+  const dy = comp.y2 - comp.y1
+  const d = Math.hypot(dx, dy)
+  const rad = Math.atan2(dy, dx)
+
+  // Pasa un punto del lienzo al marco local (rotado −ángulo, centrado en 0,0).
+  const aLocal = (px: number, py: number) => {
+    const rx = px - cx
+    const ry = py - cy
+    return {
+      x: rx * Math.cos(-rad) - ry * Math.sin(-rad),
+      y: rx * Math.sin(-rad) + ry * Math.cos(-rad),
+    }
+  }
+
+  const local: ComponentePlano = { ...comp, x1: -d / 2, y1: 0, x2: d / 2, y2: 0 }
+  if (comp.x3 !== undefined && comp.y3 !== undefined) {
+    const p3 = aLocal(comp.x3, comp.y3)
+    local.x3 = p3.x
+    local.y3 = p3.y
+  }
+
+  return (
+    <Group x={cx} y={cy} rotation={(rad * 180) / Math.PI}>
+      {children(local)}
+    </Group>
+  )
+}
 
 // Batería FÍSICA dibujada en el gutter izquierdo, con cables a los rieles.
 // (La fuente del netlist no ocupa un hueco: energiza los rieles + y −.)
 function BatteryEdge({ bateria, index }: { bateria: BateriaPlano; index: number }) {
-  const cx = 40
+  const cx = 34
   const topY = 14
   const botY = 58
   const w = 26
@@ -72,19 +142,62 @@ const CATALOGO = {
   source: Source,
   switch: Switch,
   bulb: Bulb,
+  photoresistor: Photoresistor,
+  buzzer: Buzzer,
+  crystal: Crystal,
+  relay: Relay,
+  motor: Motor,
   generic: Generic,
 }
 
-// Dibuja un riel de poder (fila de huecos con línea de color y signo).
-function PowerRail({ y, color, sign }: { y: number; color: string; sign: string }) {
-  const width = boardSize().width
+// ============================================================
+//  BASE REALISTA de la protoboard (como una física de verdad):
+//  plástico blanco en 3 tiras separadas, huecos CUADRADOS oscuros,
+//  canal central rebajado, rieles con línea roja/azul y signos.
+//  Las coordenadas de los huecos NO cambian (grid.ts manda).
+// ============================================================
+
+// Bordes horizontales del cuerpo plástico.
+const BX0 = 58
+const bx1 = () => railHoleX(COLS) + 36
+
+// Un hueco cuadrado oscuro (como los contactos reales).
+function Hueco({ x, y }: { x: number; y: number }) {
+  return (
+    <Rect
+      x={x - 3.5} y={y - 3.5} width={7} height={7} cornerRadius={1.2}
+      fill="#2b2b30" stroke="#17171a" strokeWidth={0.7}
+      listening={false} perfectDrawEnabled={false}
+    />
+  )
+}
+
+// Una tira de plástico blanco (gradiente sutil + sombra de apoyo).
+function TiraPlastico({ y0, y1 }: { y0: number; y1: number }) {
+  return (
+    <Rect
+      x={BX0} y={y0} width={bx1() - BX0} height={y1 - y0} cornerRadius={7}
+      fillLinearGradientStartPoint={{ x: 0, y: 0 }}
+      fillLinearGradientEndPoint={{ x: 0, y: y1 - y0 }}
+      fillLinearGradientColorStops={[0, '#fefefc', 0.5, '#f4f2ec', 1, '#e8e6df']}
+      stroke="#d6d4cc" strokeWidth={1}
+      shadowColor="black" shadowBlur={10} shadowOpacity={0.18} shadowOffset={{ x: 0, y: 4 }}
+      listening={false} perfectDrawEnabled={false}
+    />
+  )
+}
+
+// Un riel de poder realista: línea de color + fila de huecos + signos.
+function PowerRail({ y, color, sign, lineOffset }: { y: number; color: string; sign: string; lineOffset: number }) {
+  const xIni = railHoleX(1) - 12
+  const xFin = railHoleX(COLS) + 12
   return (
     <>
-      <Line points={[MARGIN_X, y, width - MARGIN_X, y]} stroke={color} strokeWidth={2} />
-      <Text x={20} y={y - 6} text={sign} fill={color} fontStyle="bold" />
-      <Text x={width - 30} y={y - 6} text={sign} fill={color} fontStyle="bold" />
+      <Line points={[xIni, y + lineOffset, xFin, y + lineOffset]} stroke={color} strokeWidth={2.5} listening={false} perfectDrawEnabled={false} />
+      <Text x={BX0 + 8} y={y - 8} text={sign} fontSize={16} fill={color} fontStyle="bold" listening={false} />
+      <Text x={bx1() - 22} y={y - 8} text={sign} fontSize={16} fill={color} fontStyle="bold" listening={false} />
       {Array.from({ length: COLS }).map((_, c) => (
-        <Circle key={`rail-${sign}-${c}`} x={railHoleX(c + 1)} y={y} radius={HOLE_R - 1} fill="#fff" stroke="#b9b7b1" />
+        <Hueco key={`rail-${sign}-${y}-${c}`} x={railHoleX(c + 1)} y={y} />
       ))}
     </>
   )
@@ -95,46 +208,91 @@ type Props = {
   cables?: CablePlano[]
   nodos?: NodoPlano[]
   baterias?: BateriaPlano[]
+  // Factor de escala para encajar el tablero en su contenedor (1 = tamaño natural).
+  escala?: number
 }
 
-function Protoboard({ componentes = [], cables = [], nodos = [], baterias = [] }: Props) {
+function Protoboard({ componentes = [], cables = [], nodos = [], baterias = [], escala = 1 }: Props) {
   const { width, height } = boardSize()
 
+  // Límites verticales de las 3 tiras (derivados del grid, no mágicos).
+  const tiraTop = { y0: 6, y1: TOP_MINUS_Y + 14 }
+  const tiraMain = { y0: TOP_MINUS_Y + 18, y1: rowY(ROWS.length - 1) + 12 }
+  const tiraBot = { y0: bottomPlusY() - 16, y1: bottomMinusY() + 14 }
+
+  // Canal central rebajado (entre las filas E y F).
+  const canalY0 = rowY(4) + 12
+  const canalY1 = rowY(5) - 12
+
   return (
-    <Stage width={width} height={height}>
-      {/* CAPA 1: la protoboard (fija) */}
-      <Layer>
-        <Rect x={0} y={0} width={width} height={height} fill="#e7e5e0" cornerRadius={12} stroke="#c9c7c1" />
+    <Stage width={width * escala} height={height * escala} scaleX={escala} scaleY={escala}>
+      {/* CAPA 1: la protoboard (fija, no interactiva) */}
+      <Layer listening={false}>
+        {/* Cuerpo plástico en 3 tiras (riel superior · bloque central · riel inferior) */}
+        <TiraPlastico y0={tiraTop.y0} y1={tiraTop.y1} />
+        <TiraPlastico y0={tiraMain.y0} y1={tiraMain.y1} />
+        <TiraPlastico y0={tiraBot.y0} y1={tiraBot.y1} />
 
-        <PowerRail y={TOP_PLUS_Y} color="#e11d48" sign="+" />
-        <PowerRail y={TOP_MINUS_Y} color="#2563eb" sign="−" />
+        {/* Canal central rebajado (donde se montan los ICs) */}
+        <Rect
+          x={BX0 + 2} y={canalY0} width={bx1() - BX0 - 4} height={canalY1 - canalY0}
+          fillLinearGradientStartPoint={{ x: 0, y: 0 }}
+          fillLinearGradientEndPoint={{ x: 0, y: canalY1 - canalY0 }}
+          fillLinearGradientColorStops={[0, '#d8d6cf', 0.15, '#e6e4dd', 0.85, '#e6e4dd', 1, '#f6f4ee']}
+          listening={false} perfectDrawEnabled={false}
+        />
+        <Line points={[BX0 + 2, canalY0, bx1() - 2, canalY0]} stroke="#c3c1b9" strokeWidth={1} listening={false} perfectDrawEnabled={false} />
+        <Line points={[BX0 + 2, canalY1, bx1() - 2, canalY1]} stroke="#ffffff" strokeWidth={1} listening={false} perfectDrawEnabled={false} />
 
+        {/* Rieles superiores: + (línea roja arriba) y − (línea azul abajo) */}
+        <PowerRail y={TOP_PLUS_Y} color="#dc2626" sign="+" lineOffset={-11} />
+        <PowerRail y={TOP_MINUS_Y} color="#2563eb" sign="−" lineOffset={11} />
+
+        {/* Números de columna */}
         {Array.from({ length: COLS }).map((_, c) => (
-          <Text key={`col-${c}`} x={MARGIN_X + c * SPACING - 3} y={MARGIN_Y - 20} text={`${c + 1}`} fontSize={9} fill="#7c7a74" />
+          <Text key={`col-${c}`} x={MARGIN_X + c * SPACING - 5} y={MARGIN_Y - 19} width={10} align="center" text={`${c + 1}`} fontSize={8.5} fill="#8d8b83" listening={false} />
         ))}
+
+        {/* Letras de fila (a ambos lados, como en una protoboard real) */}
         {ROWS.map((label, r) => (
-          <Text key={`row-${label}`} x={MARGIN_X - 28} y={rowY(r) - 5} text={label} fontSize={11} fill="#7c7a74" />
+          <Fragment key={`row-${label}`}>
+            <Text x={BX0 + 12} y={rowY(r) - 5} text={label} fontSize={10} fill="#8d8b83" listening={false} />
+            <Text x={railHoleX(COLS) + 18} y={rowY(r) - 5} text={label} fontSize={10} fill="#8d8b83" listening={false} />
+          </Fragment>
         ))}
+
+        {/* Huecos de la matriz principal (cuadrados oscuros) */}
         {ROWS.map((label, r) =>
           Array.from({ length: COLS }).map((_, c) => (
-            <Circle key={`${label}-${c}`} x={MARGIN_X + c * SPACING} y={rowY(r)} radius={HOLE_R} fill="#ffffff" stroke="#b9b7b1" />
+            <Hueco key={`${label}-${c}`} x={MARGIN_X + c * SPACING} y={rowY(r)} />
           )),
         )}
 
-        <PowerRail y={bottomPlusY()} color="#e11d48" sign="+" />
-        <PowerRail y={bottomMinusY()} color="#2563eb" sign="−" />
+        {/* Rieles inferiores */}
+        <PowerRail y={bottomPlusY()} color="#dc2626" sign="+" lineOffset={-11} />
+        <PowerRail y={bottomMinusY()} color="#2563eb" sign="−" lineOffset={11} />
       </Layer>
 
-      {/* CAPA 2: los componentes del netlist + sus cables */}
+      {/* CAPA 2: los componentes del circuito + sus cables */}
       <Layer>
         {/* Baterías físicas al borde (energizan los rieles) */}
         {baterias.map((bat, i) => (
-          <BatteryEdge key={`bat-${bat.id}`} bateria={bat} index={i} />
+          <Group key={`bat-${bat.id}`} opacity={opacidadDe(bat.estado)}>
+            <BatteryEdge bateria={bat} index={i} />
+          </Group>
         ))}
 
         {/* Cables (van debajo de los componentes) */}
         {cables.map((cable, i) => (
-          <Wire key={`cable-${i}`} x1={cable.x1} y1={cable.y1} x2={cable.x2} y2={cable.y2} color={cable.color ?? '#16a34a'} />
+          <Group key={`cable-${i}`} opacity={opacidadDe(cable.estado)}>
+            {cable.estado === 'activo' && (
+              <>
+                <MarcadorActivo x={cable.x1} y={cable.y1} />
+                <MarcadorActivo x={cable.x2} y={cable.y2} />
+              </>
+            )}
+            <Wire x1={cable.x1} y1={cable.y1} x2={cable.x2} y2={cable.y2} color={cable.color ?? '#16a34a'} />
+          </Group>
         ))}
 
         {/* Nodos (V_in, V_out, GND...): terminal de color + etiqueta */}
@@ -145,36 +303,56 @@ function Protoboard({ componentes = [], cables = [], nodos = [], baterias = [] }
           </Fragment>
         ))}
 
-        {/* Componentes: cada uno elige su dibujo del catálogo según su "kind" */}
+        {/* Componentes: dibujo del catálogo, orientado según sus pines
+            (ComponenteOrientado los rota para que se vean como en la Biblioteca) */}
         {componentes.map((comp) => {
           const labelX = (comp.x1 + comp.x2) / 2 - comp.label.length * 3
           const labelY = Math.min(comp.y1, comp.y2) - 24
           return (
-            <Fragment key={comp.id}>
-              {comp.kind === 'resistor' ? (
-                // El resistor recibe datos crudos: calcula sus propias bandas de color.
-                <Resistor
-                  x1={comp.x1} y1={comp.y1} x2={comp.x2} y2={comp.y2}
-                  valor={comp.valor} tolerancia={comp.tolerancia} potenciaNominal={comp.potenciaNominal}
-                />
-              ) : comp.kind === 'transistor' ? (
-                // El transistor tiene una 3ra pata (base) — patrón distinto a los demás.
-                <Transistor x1={comp.x1} y1={comp.y1} x2={comp.x2} y2={comp.y2} x3={comp.x3} y3={comp.y3} />
-              ) : comp.kind === 'potentiometer' ? (
-                <Potentiometer x1={comp.x1} y1={comp.y1} x2={comp.x2} y2={comp.y2} x3={comp.x3} y3={comp.y3} />
-              ) : comp.kind === 'electrolytic' ? (
-                <ElectrolyticCapacitor x1={comp.x1} y1={comp.y1} x2={comp.x2} y2={comp.y2} valor={comp.valor} />
-              ) : comp.kind === 'ic' ? (
+            <Group key={comp.id} opacity={opacidadDe(comp.estado)}>
+              {/* Paso activo: anillos en los huecos donde van las patas */}
+              {comp.estado === 'activo' && (
+                <>
+                  <MarcadorActivo x={comp.x1} y={comp.y1} />
+                  <MarcadorActivo x={comp.x2} y={comp.y2} />
+                  {comp.x3 !== undefined && comp.y3 !== undefined && <MarcadorActivo x={comp.x3} y={comp.y3} />}
+                </>
+              )}
+              {comp.kind === 'ic' ? (
                 // El IC no usa el patrón de patas: se dibuja como caja con pines.
                 <IC x={Math.min(comp.x1, comp.x2)} y={Math.min(comp.y1, comp.y2) - 18} width={Math.abs(comp.x2 - comp.x1) || 60} label={comp.id} />
               ) : (
-                (() => {
-                  const Dibujo = CATALOGO[comp.kind]
-                  return <Dibujo x1={comp.x1} y1={comp.y1} x2={comp.x2} y2={comp.y2} />
-                })()
+                <ComponenteOrientado comp={comp}>
+                  {(local) =>
+                    local.kind === 'resistor' ? (
+                      // El resistor recibe datos crudos: calcula sus propias bandas de color.
+                      <Resistor
+                        x1={local.x1} y1={local.y1} x2={local.x2} y2={local.y2}
+                        valor={local.valor} tolerancia={local.tolerancia} potenciaNominal={local.potenciaNominal}
+                      />
+                    ) : local.kind === 'transistor' ? (
+                      // El transistor tiene una 3ra pata (base) — patrón distinto a los demás.
+                      <Transistor x1={local.x1} y1={local.y1} x2={local.x2} y2={local.y2} x3={local.x3} y3={local.y3} />
+                    ) : local.kind === 'potentiometer' ? (
+                      <Potentiometer x1={local.x1} y1={local.y1} x2={local.x2} y2={local.y2} x3={local.x3} y3={local.y3} />
+                    ) : local.kind === 'regulator' ? (
+                      // Regulador TO-220: 3 patas (Vin, GND centro, Vout).
+                      <VoltageRegulator x1={local.x1} y1={local.y1} x2={local.x2} y2={local.y2} x3={local.x3} y3={local.y3} label={local.valor} />
+                    ) : local.kind === 'sevenseg' ? (
+                      <SevenSegment x1={local.x1} y1={local.y1} x2={local.x2} y2={local.y2} />
+                    ) : local.kind === 'electrolytic' ? (
+                      <ElectrolyticCapacitor x1={local.x1} y1={local.y1} x2={local.x2} y2={local.y2} valor={local.valor} />
+                    ) : (
+                      (() => {
+                        const Dibujo = CATALOGO[local.kind as keyof typeof CATALOGO]
+                        return <Dibujo x1={local.x1} y1={local.y1} x2={local.x2} y2={local.y2} />
+                      })()
+                    )
+                  }
+                </ComponenteOrientado>
               )}
-              <Text x={labelX} y={labelY} text={comp.label} fontSize={10} fill="#6d28d9" fontStyle="bold" />
-            </Fragment>
+              <Text x={labelX} y={labelY} text={comp.label} fontSize={10} fill={comp.estado === 'activo' ? ACCENT : '#6d28d9'} fontStyle="bold" />
+            </Group>
           )
         })}
       </Layer>
