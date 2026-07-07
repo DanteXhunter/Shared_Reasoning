@@ -57,14 +57,19 @@ def crear_modelo(proveedor: str) -> ChatOpenAI:
 # ALGORITMO DE POSICIONAMIENTO (sin LLM)
 # ─────────────────────────────────────────────
 
-def calcular_posiciones(netlist: dict) -> dict:
+def calcular_posiciones(netlist: dict, overrides: Optional[dict] = None) -> dict:
     """
     Asigna coordenadas físicas a cada componente del netlist.
     Cada componente ocupa una fila. Sus pines van en columnas b y g,
     cruzando el gap central del protoboard.
+
+    overrides: {comp_id: fila} — fuerza esa fila para el componente indicado.
+    Los demás componentes se asignan secuencialmente evitando las filas reservadas.
+
     Retorna un diccionario: componente_id -> {pin -> {fila, columna}}
     """
     posiciones = {}
+    filas_reservadas = set(overrides.values()) if overrides else set()
     fila_actual = 1
 
     for componente in netlist.get("componentes", []):
@@ -72,14 +77,20 @@ def calcular_posiciones(netlist: dict) -> dict:
         pines = componente.get("pines", [])
         posiciones[comp_id] = {}
 
+        if overrides and comp_id in overrides:
+            fila = overrides[comp_id]
+        else:
+            while fila_actual in filas_reservadas:
+                fila_actual += 1
+            fila = fila_actual
+            fila_actual += 2
+
         for i, pin in enumerate(pines):
             columna = "b" if i % 2 == 0 else "g"
             posiciones[comp_id][pin["nombre"]] = {
-                "fila": fila_actual,
+                "fila": fila,
                 "columna": columna,
             }
-
-        fila_actual += 2  # Dejar una fila de separación entre componentes
 
     return posiciones
 
@@ -156,7 +167,8 @@ def nodo_planificar(estado: EstadoGlobal) -> dict:
     intento = estado["planner_intento"]
     errores = estado["planner_errores"]
 
-    posiciones = calcular_posiciones(netlist)
+    overrides = estado.get("planner_posiciones_override")
+    posiciones = calcular_posiciones(netlist, overrides)
     cables = calcular_cables(netlist, posiciones)
 
     prompt_modo = {
