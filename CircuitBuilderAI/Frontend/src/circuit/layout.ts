@@ -1,5 +1,5 @@
 import { holePos, railHoleX, ROWS, TOP_PLUS_Y, TOP_MINUS_Y } from './grid'
-import type { Netlist, ComponentePlano, CablePlano, NodoPlano, Instruccion, BateriaPlano } from './types'
+import type { Netlist, ComponentePlano, CablePlano, NodoPlano, Instruccion, BateriaPlano, EstadoItem } from './types'
 
 // Punto de conexión a los rieles de poder (columna 2, cerca del borde izq).
 const RAIL_PLUS = { x: railHoleX(2), y: TOP_PLUS_Y }
@@ -33,15 +33,24 @@ function railDeNodo(nombre: string): { x: number; y: number } | null {
 
 function normalizarTipo(tipo: string): ComponentePlano['kind'] {
   const t = tipo.toLowerCase()
+  // OJO al ORDEN: 'fotorresistor'/'sensor de luz' contienen 'resist'/'luz',
+  // así que el fotorresistor debe chequearse ANTES que resistor y bulb.
+  if (t.includes('ldr') || t.includes('fotorres') || t.includes('photores') || t.includes('fotoresist') || t.includes('fotocelda')) return 'photoresistor'
   if (t.includes('resist')) return 'resistor'
   if (t.includes('led')) return 'led' // OJO: chequear 'led' ANTES que 'diodo' — un LED también es técnicamente un diodo
   if (t.includes('diodo') || t.includes('diode')) return 'diode'
+  if (t.includes('7805') || t.includes('regulador') || t.includes('regulator') || t.includes('to-220') || t.includes('to220')) return 'regulator'
   if (t.includes('transistor') || t.includes('bjt') || t.includes('npn') || t.includes('pnp')) return 'transistor'
   if (t.includes('potenci') || t.includes('trimmer')) return 'potentiometer'
   if (t.includes('electrolit') || t.includes('electrolyt')) return 'electrolytic'
   if (t.includes('capacit') || t.includes('condensador')) return 'capacitor'
   if (t.includes('inductor') || t.includes('bobina')) return 'inductor'
   if (t.includes('fusible') || t.includes('fuse')) return 'fuse'
+  if (t.includes('cristal') || t.includes('crystal') || t.includes('oscilador') || t.includes('xtal') || t.includes('resonador')) return 'crystal'
+  if (t.includes('7 seg') || t.includes('siete seg') || t.includes('seven') || t.includes('segmento') || t.includes('display')) return 'sevenseg'
+  if (t.includes('rele') || t.includes('relé') || t.includes('relay')) return 'relay'
+  if (t.includes('buzzer') || t.includes('zumbador') || t.includes('piezo') || t.includes('bocina') || t.includes('altavoz') || t.includes('speaker') || t.includes('parlante')) return 'buzzer'
+  if (t.includes('motor')) return 'motor'
   if (t.includes('integrado') || t.includes('chip') || /\bic\b/.test(t) || /\b555\b/.test(t) || t.includes('amp op') || t.includes('opamp')) return 'ic'
   if (t.includes('pulsador') || t.includes('push') || t.includes('boton')) return 'pushbutton'
   if (t.includes('fuente') || t.includes('generador') || t.includes('bateria') || t.includes('pila')) return 'source'
@@ -181,7 +190,10 @@ function colorCable(nombre: string): string {
   return '#16a34a'
 }
 
-export function layoutDesdeInstrucciones(instrucciones: Instruccion[]): {
+// `pasoActivo` habilita el REVELADO PROGRESIVO (issue #23): los pasos
+// futuros no se dibujan, el paso activo se resalta y los previos se atenúan.
+// Sin `pasoActivo` se dibuja todo en estado 'normal' (comportamiento clásico).
+export function layoutDesdeInstrucciones(instrucciones: Instruccion[], pasoActivo?: number): {
   componentes: ComponentePlano[]
   cables: CablePlano[]
   baterias: BateriaPlano[]
@@ -191,11 +203,16 @@ export function layoutDesdeInstrucciones(instrucciones: Instruccion[]): {
   const baterias: BateriaPlano[] = []
 
   for (const ins of instrucciones) {
+    // Revelado progresivo: lo que viene después del paso activo no existe aún.
+    if (pasoActivo !== undefined && ins.numero > pasoActivo) continue
+    const estado: EstadoItem =
+      pasoActivo === undefined ? 'normal' : ins.numero === pasoActivo ? 'activo' : 'previo'
+
     if (ins.tipo === 'colocar_componente' && ins.pines && ins.pines.length >= 2) {
       const kind = normalizarTipo(ins.componente_tipo ?? '')
       // La fuente no se dibuja en el tablero: es batería al borde.
       if (kind === 'source') {
-        baterias.push({ id: ins.componente_id ?? `F${ins.numero}`, valor: ins.componente_valor ?? undefined })
+        baterias.push({ id: ins.componente_id ?? `F${ins.numero}`, valor: ins.componente_valor ?? undefined, estado })
         continue
       }
       const a = coordPlanner(ins.pines[0].fila, ins.pines[0].columna)
@@ -207,6 +224,7 @@ export function layoutDesdeInstrucciones(instrucciones: Instruccion[]): {
         componentes.push({
           id: ins.componente_id ?? `C${ins.numero}`,
           kind,
+          estado,
           x1: a.x, y1: a.y, x2: b.x, y2: b.y,
           x3: c?.x, y3: c?.y,
           label: `${ins.componente_id ?? ''} ${ins.componente_valor ?? ''}`.trim(),
@@ -222,7 +240,7 @@ export function layoutDesdeInstrucciones(instrucciones: Instruccion[]): {
       // Un extremo en riel cae vertical usando la X del otro extremo.
       if (desdeRail) a = { x: b?.x ?? railHoleX(Math.max(1, desde.fila)), y: desde.columna.includes('+') ? TOP_PLUS_Y : TOP_MINUS_Y }
       if (hastaRail) b = { x: a?.x ?? railHoleX(Math.max(1, hasta.fila)), y: hasta.columna.includes('+') ? TOP_PLUS_Y : TOP_MINUS_Y }
-      if (a && b) cables.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, color: colorCable(color) })
+      if (a && b) cables.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, color: colorCable(color), estado })
     }
   }
 
@@ -242,6 +260,33 @@ export const EJEMPLO_PLANNER: Instruccion[] = [
 export const EJEMPLO_DIODO_TRANSISTOR: Instruccion[] = [
   { numero: 1, tipo: 'colocar_componente', componente_id: 'D1', componente_tipo: 'diodo', componente_valor: '1N4007', descripcion: 'Coloca D1 en fila 2, columnas b y f.', pines: [{ nombre: 'anodo', fila: 2, columna: 'b' }, { nombre: 'catodo', fila: 2, columna: 'f' }], cable: null },
   { numero: 2, tipo: 'colocar_componente', componente_id: 'Q1', componente_tipo: 'transistor', componente_valor: '2N2222', descripcion: 'Coloca Q1 (NPN) en fila 5, con emisor en b, base en d y colector en f.', pines: [{ nombre: 'emisor', fila: 5, columna: 'b' }, { nombre: 'colector', fila: 5, columna: 'f' }, { nombre: 'base', fila: 5, columna: 'd' }], cable: null },
+]
+
+// ============================================================
+//  EJEMPLO COMPLEJO: Sensor de luz nocturna (13 pasos).
+//  LDR + R1 forman un divisor; cuando oscurece, el nodo sube y
+//  Q1 (NPN) enciende el LED a través de R3 (limitadora).
+//  Topología por regletas (mismas columnas comparten strip a-e / f-j):
+//    riel + → LDR → [nodo] → R1 → riel −
+//    [nodo] → base Q1 · emisor → riel − · colector → cátodo LED
+//    ánodo LED → R3 → riel +
+//  Colores según convención §7.B: rojo=+, negro=GND, otros=señal.
+// ============================================================
+export const EJEMPLO_SENSOR_LUZ: Instruccion[] = [
+  { numero: 1, tipo: 'colocar_componente', componente_id: 'BAT1', componente_tipo: 'fuente', componente_valor: '9V', descripcion: 'Conecta la batería de 9V: el positivo al riel rojo (+) y el negativo al riel azul (−).', pines: [{ nombre: 'positivo', fila: 1, columna: '+' }, { nombre: 'negativo', fila: 1, columna: '-' }], cable: null },
+  { numero: 2, tipo: 'colocar_componente', componente_id: 'LDR1', componente_tipo: 'fotorresistor', componente_valor: 'GL5528', descripcion: 'Coloca el fotorresistor (LDR) en la fila 3, entre las columnas b y f, cruzando el canal central.', pines: [{ nombre: 'pin1', fila: 3, columna: 'b' }, { nombre: 'pin2', fila: 3, columna: 'f' }], cable: null },
+  { numero: 3, tipo: 'conectar_cable', componente_id: null, componente_tipo: null, componente_valor: null, descripcion: 'Cable rojo del riel + a la fila 3a (alimenta la pata superior del LDR por su regleta).', pines: null, cable: { color: 'rojo', desde: { fila: 3, columna: '+' }, hasta: { fila: 3, columna: 'a' } } },
+  { numero: 4, tipo: 'colocar_componente', componente_id: 'R1', componente_tipo: 'resistencia', componente_valor: '10k', descripcion: 'Coloca R1 (10 kΩ) en la fila 6, entre b y f. Junto al LDR formará el divisor de voltaje.', pines: [{ nombre: 'pin1', fila: 6, columna: 'b' }, { nombre: 'pin2', fila: 6, columna: 'f' }], cable: null },
+  { numero: 5, tipo: 'conectar_cable', componente_id: null, componente_tipo: null, componente_valor: null, descripcion: 'Cable amarillo de 3g a 6a: une la pata inferior del LDR con la superior de R1 — este es el NODO del divisor.', pines: null, cable: { color: 'amarillo', desde: { fila: 3, columna: 'g' }, hasta: { fila: 6, columna: 'a' } } },
+  { numero: 6, tipo: 'conectar_cable', componente_id: null, componente_tipo: null, componente_valor: null, descripcion: 'Cable negro de 6g al riel −: cierra el divisor a tierra.', pines: null, cable: { color: 'negro', desde: { fila: 6, columna: 'g' }, hasta: { fila: 6, columna: '-' } } },
+  { numero: 7, tipo: 'colocar_componente', componente_id: 'Q1', componente_tipo: 'transistor', componente_valor: '2N2222', descripcion: 'Coloca Q1 (NPN 2N2222) en la fila 10: emisor en b, base en d y colector en f.', pines: [{ nombre: 'emisor', fila: 10, columna: 'b' }, { nombre: 'colector', fila: 10, columna: 'f' }, { nombre: 'base', fila: 10, columna: 'd' }], cable: null },
+  { numero: 8, tipo: 'conectar_cable', componente_id: null, componente_tipo: null, componente_valor: null, descripcion: 'Cable verde de 6c a 10e: lleva el nodo del divisor a la base de Q1 (la señal que decide si enciende).', pines: null, cable: { color: 'verde', desde: { fila: 6, columna: 'c' }, hasta: { fila: 10, columna: 'e' } } },
+  { numero: 9, tipo: 'conectar_cable', componente_id: null, componente_tipo: null, componente_valor: null, descripcion: 'Cable negro de 10a al riel −: el emisor de Q1 va a tierra.', pines: null, cable: { color: 'negro', desde: { fila: 10, columna: 'a' }, hasta: { fila: 10, columna: '-' } } },
+  { numero: 10, tipo: 'colocar_componente', componente_id: 'LED1', componente_tipo: 'led', componente_valor: 'rojo', descripcion: 'Coloca el LED en la fila 14: ánodo (pata larga) en b y cátodo (lado plano) en f.', pines: [{ nombre: 'anodo', fila: 14, columna: 'b' }, { nombre: 'catodo', fila: 14, columna: 'f' }], cable: null },
+  { numero: 11, tipo: 'conectar_cable', componente_id: null, componente_tipo: null, componente_valor: null, descripcion: 'Cable azul de 10g a 14g: conecta el colector de Q1 con el cátodo del LED.', pines: null, cable: { color: 'azul', desde: { fila: 10, columna: 'g' }, hasta: { fila: 14, columna: 'g' } } },
+  { numero: 12, tipo: 'colocar_componente', componente_id: 'R3', componente_tipo: 'resistencia', componente_valor: '220', descripcion: 'Coloca R3 (220 Ω, limitadora del LED) en la fila 18, entre b y f.', pines: [{ nombre: 'pin1', fila: 18, columna: 'b' }, { nombre: 'pin2', fila: 18, columna: 'f' }], cable: null },
+  { numero: 13, tipo: 'conectar_cable', componente_id: null, componente_tipo: null, componente_valor: null, descripcion: 'Cable amarillo de 14a a 18a: une el ánodo del LED con R3.', pines: null, cable: { color: 'amarillo', desde: { fila: 14, columna: 'a' }, hasta: { fila: 18, columna: 'a' } } },
+  { numero: 14, tipo: 'conectar_cable', componente_id: null, componente_tipo: null, componente_valor: null, descripcion: 'Cable rojo de 18g al riel +: R3 queda alimentada y el circuito completo. Tapa el LDR con la mano: ¡el LED enciende!', pines: null, cable: { color: 'rojo', desde: { fila: 18, columna: 'g' }, hasta: { fila: 18, columna: '+' } } },
 ]
 
 // Netlist de ejemplo (divisor de voltaje) idéntico al que devuelve la IA.
