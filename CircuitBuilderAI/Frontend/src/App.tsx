@@ -26,7 +26,7 @@ function App() {
 
   if (modoDev) return <DevApp onVolver={() => setModoDev(false)} />
 
-  if (sesion) return <VistaPrincipal sesion={sesion} onNuevo={() => { setSesion(null); setPaso('bienvenida') }} onDev={() => setModoDev(true)} />
+  if (sesion) return <VistaPrincipal key={sesion.nombre} sesion={sesion} onNuevo={() => { setSesion(null); setPaso('bienvenida') }} onDev={() => setModoDev(true)} onCargarSesion={setSesion} />
 
   switch (paso) {
     case 'intro':

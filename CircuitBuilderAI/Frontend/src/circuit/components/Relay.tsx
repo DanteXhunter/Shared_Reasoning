@@ -13,17 +13,23 @@ type Props = {
 function Relay({ x1, y1, x2, y2 }: Props) {
   const midX = (x1 + x2) / 2
   const legsY = Math.max(y1, y2)
-  const bodyW = Math.max(Math.abs(x2 - x1) + 12, 40)
-  const bodyH = 34
+  // Cuerpo de tamaño FIJO (no proporcional a la separación de las patas —
+  // mismo criterio que los demás componentes de patas muy separadas): si
+  // creciera con la distancia invadiría huecos vecinos.
+  const bodyW = 44
+  const bodyH = 30
   const bx = midX - bodyW / 2
   const by = legsY - bodyH - 10
+  const fan = bodyW * 0.28
 
   return (
     <Group>
-      {/* Pines (5: 2 bobina + 3 contactos — dibujo esquemático de extremos) */}
-      {[x1, midX, x2].map((px, i) => (
-        <Line key={i} points={[px, legsY, px, by + bodyH - 1]} stroke="#9ca3af" strokeWidth={2} lineCap="round" perfectDrawEnabled={false} />
-      ))}
+      {/* Solo 2 patas: las que tienen coordenada real (esta app modela el
+          relé como bloque de 2 pines — un módulo real trae más pines, pero
+          acá no había dato para una 3ra pata: dibujarla confundía, parecía
+          una conexión real que no existía). */}
+      <Line points={[midX - fan, by + bodyH - 1, x1, y1]} stroke="#9ca3af" strokeWidth={2} lineCap="round" perfectDrawEnabled={false} />
+      <Line points={[midX + fan, by + bodyH - 1, x2, y2]} stroke="#9ca3af" strokeWidth={2} lineCap="round" perfectDrawEnabled={false} />
 
       {/* Caja azul (cuerpo del relé, con volumen) */}
       <Rect
