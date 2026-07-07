@@ -43,7 +43,9 @@ export type ComponentePlano = {
   kind:
     | 'resistor' | 'led' | 'diode' | 'transistor' | 'capacitor' | 'electrolytic'
     | 'inductor' | 'fuse' | 'potentiometer' | 'pushbutton' | 'ic'
-    | 'source' | 'switch' | 'bulb' | 'generic'
+    | 'source' | 'switch' | 'bulb'
+    | 'photoresistor' | 'buzzer' | 'regulator' | 'crystal' | 'sevenseg' | 'relay' | 'motor'
+    | 'generic'
   x1: number
   y1: number
   x2: number
@@ -90,4 +92,4 @@ export type NodoPlano = { x: number; y: number; label: string; color: string }
 
 // Una batería/fuente FÍSICA: no va en un hueco, se dibuja al borde y
 // energiza los rieles (+ y −). El id/valor vienen del netlist.
-export type BateriaPlano = { id: string; valor?: string }
+export type BateriaPlano = { id: string; valor?: string; estado?: EstadoItem }

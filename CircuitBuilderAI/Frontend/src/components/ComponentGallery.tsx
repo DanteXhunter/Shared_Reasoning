@@ -19,6 +19,13 @@ import Bulb from '../circuit/components/Bulb'
 import IC from '../circuit/components/IC'
 import Wire from '../circuit/components/Wire'
 import Generic from '../circuit/components/Generic'
+import Photoresistor from '../circuit/components/Photoresistor'
+import Buzzer from '../circuit/components/Buzzer'
+import VoltageRegulator from '../circuit/components/VoltageRegulator'
+import Crystal from '../circuit/components/Crystal'
+import SevenSegment from '../circuit/components/SevenSegment'
+import Relay from '../circuit/components/Relay'
+import Motor from '../circuit/components/Motor'
 
 // Galería que renderiza TODOS los componentes del catálogo en un solo lugar.
 // Sirve como referencia visual y como banco de pruebas rápido de cada dibujo.
@@ -166,7 +173,17 @@ function ComponentGallery() {
       <Celda nombre="Bombilla" sub="incandescente física"><Bulb {...dosPatas} /></Celda>
 
       <Celda nombre="Circuito integrado" sub="DIP · ej. NE555"><IC x={55} y={32} width={100} pins={8} label="NE555" /></Celda>
-      <Celda nombre="Cable" sub="jumper"><Wire {...dosPatas} color="#dc2626" /></Celda>
+      <Celda nombre="Cable" sub="jumper Dupont"><Wire {...dosPatas} color="#dc2626" /></Celda>
+      <Celda nombre="Fotorresistor" sub="LDR · sensor de luz"><Photoresistor {...dosPatas} /></Celda>
+
+      <Celda nombre="Buzzer" sub="zumbador piezo"><Buzzer {...dosPatas} /></Celda>
+      <Celda nombre="Regulador" sub="TO-220 · 7805"><VoltageRegulator {...tresPatas} label="7805" /></Celda>
+      <Celda nombre="Cristal" sub="oscilador HC-49"><Crystal {...dosPatas} /></Celda>
+
+      <Celda nombre="Display 7 seg." sub="1 dígito"><SevenSegment {...dosPatas} /></Celda>
+      <Celda nombre="Relé" sub="SPDT"><Relay {...dosPatas} /></Celda>
+      <Celda nombre="Motor DC" sub="hobby"><Motor {...dosPatas} /></Celda>
+
       <Celda nombre="Genérico" sub="fallback"><Generic {...dosPatas} /></Celda>
       </div>
     </div>
