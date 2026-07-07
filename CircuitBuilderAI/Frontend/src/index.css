@@ -1,1 +1,54 @@
 @import "tailwindcss";
+
+/* ============================================================
+   Tema "Paralelo" — modo oscuro (gris + morado) y modo claro
+   (crema + naranja). Falta un tercer modo, aún sin definir.
+   Paletas y logo/mascota "Blob" entregados por diseño 2026-07-06.
+   ============================================================ */
+:root,
+[data-theme="dark"] {
+  --bg1: #242424;
+  --bg2: #2e2e2e;
+  --accent: #a855f7;
+  --accent-d: #9333ea;
+  --ink: #ececec;
+  --ink-soft: #9a9a9a;
+  --border: rgba(255, 255, 255, 0.09);
+  --logo-wordmark: url("/logoDARK.png");
+  --logo-blob: url("/blopDARK.png");
+}
+
+[data-theme="light"] {
+  --bg1: #eae5d2;
+  --bg2: #fdfbf0;
+  --accent: #dc9138;
+  --accent-d: #c97d22;
+  --ink: #2e2a22;
+  --ink-soft: #8a8370;
+  --border: rgba(0, 0, 0, 0.08);
+  --logo-wordmark: url("/logoLIGHT.png");
+  --logo-blob: url("/blopLIGHT.png");
+}
+
+.panel {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.accent-bg {
+  background: linear-gradient(135deg, var(--accent), var(--accent-d));
+}
+
+/* Patrón de "huecos" de protoboard, para fondos decorativos */
+.holes {
+  background-image: radial-gradient(circle, currentColor 1.5px, transparent 1.5px);
+  background-size: 24px 24px;
+  color: var(--ink-soft);
+}
+
+/* Scrollbars discretos, adaptados al tema activo */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--ink) 25%, transparent) transparent;
+}
