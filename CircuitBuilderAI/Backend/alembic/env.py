@@ -9,8 +9,8 @@ load_dotenv()
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from database import Base
-import models  # noqa: F401 — registra los modelos en Base.metadata
+from db.database import Base
+import db.models  # noqa: F401 — registra los modelos en Base.metadata
 
 config = context.config
 config.set_main_option("sqlalchemy.url", os.getenv("DATABASE_URL"))

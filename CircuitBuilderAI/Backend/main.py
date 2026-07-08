@@ -1,11 +1,23 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from agents.extractor_agent import ejecutar_extractor
 from agents.planner_agent import ejecutar_planner
 from agents.chat_agent_v2 import ejecutar_chat_agent_v2
 from agents.estado import ModoInteraccion, MensajeChat
+from db.database import get_db
+from db.models import Usuario
+from auth import (
+    RegistroRequest,
+    LoginRequest,
+    TokenResponse,
+    hashear_contrasena,
+    verificar_contrasena,
+    crear_token,
+)
 from metricas import Metricas, LIMITES
 import json
 import os
@@ -53,6 +65,52 @@ async def root():
         "version": "1.0.0",
         "metricas": {proveedor: metricas.resumen(proveedor) for proveedor in PROVEEDORES_VALIDOS}
     }
+
+
+@app.post("/auth/registro", response_model=TokenResponse, status_code=201)
+def registro(datos: RegistroRequest, db: Session = Depends(get_db)):
+    # Verificación previa por email (mensaje claro). La restricción UNIQUE de la
+    # BD es la garantía final ante condiciones de carrera.
+    if db.query(Usuario).filter(Usuario.email == datos.email).first():
+        raise HTTPException(status_code=409, detail="Ya existe una cuenta con este email.")
+
+    usuario = Usuario(
+        nombre=datos.nombre,
+        email=datos.email,
+        contrasena_hash=hashear_contrasena(datos.contrasena),
+        nivel=datos.nivel,
+    )
+    db.add(usuario)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Ya existe una cuenta con este email.")
+    db.refresh(usuario)
+
+    token = crear_token(usuario.id)
+    return TokenResponse(
+        access_token=token,
+        usuario_id=str(usuario.id),
+        nombre=usuario.nombre,
+        nivel=usuario.nivel,
+    )
+
+
+@app.post("/auth/login", response_model=TokenResponse)
+def login(datos: LoginRequest, db: Session = Depends(get_db)):
+    usuario = db.query(Usuario).filter(Usuario.email == datos.email).first()
+    # Mensaje genérico a propósito: no revela si el email existe (evita enumeración).
+    if usuario is None or not verificar_contrasena(usuario.contrasena_hash, datos.contrasena):
+        raise HTTPException(status_code=401, detail="Credenciales incorrectas.")
+
+    token = crear_token(usuario.id)
+    return TokenResponse(
+        access_token=token,
+        usuario_id=str(usuario.id),
+        nombre=usuario.nombre,
+        nivel=usuario.nivel,
+    )
 
 
 @app.post("/analizar")
