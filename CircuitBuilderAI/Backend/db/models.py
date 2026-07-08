@@ -2,7 +2,7 @@ from sqlalchemy import Column, String, DateTime, Text, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
 import uuid
-from database import Base
+from db.database import Base
 
 
 class Usuario(Base):
@@ -20,11 +20,19 @@ class Sesion(Base):
     __tablename__ = "sesiones"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    usuario_id = Column(UUID(as_uuid=True), ForeignKey("usuarios.id"), nullable=False)
+    # Si se borra un usuario, se borran en cascada todas sus sesiones.
+    usuario_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("usuarios.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     netlist = Column(JSONB)
     instrucciones = Column(JSONB)
     historial_chat = Column(JSONB)
-    modo_detectado = Column(String(20)) 
+    # Modo de interacción predominante de la sesión (resumen calculado a partir
+    # de los mensajes). La fuente de verdad por-mensaje vive en ChatMensaje.
+    modo_detectado = Column(String(20))
     metricas = Column(JSONB)
     fecha = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -33,8 +41,15 @@ class ChatMensaje(Base):
     __tablename__ = "chat_mensajes"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    sesion_id = Column(UUID(as_uuid=True), ForeignKey("sesiones.id"), nullable=False)
+    # Si se borra una sesión, se borran en cascada todos sus mensajes.
+    sesion_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("sesiones.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     rol = Column(String(20), nullable=False)
     contenido = Column(Text, nullable=False)
     modo_detectado = Column(String(20))
-    timestamp = Column(DateTime(timezone=True), server_default=func.now())
+    # Indexado porque el historial se consulta ordenado cronológicamente.
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), index=True)

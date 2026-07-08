@@ -9,3 +9,6 @@ langchain-openai
 sqlalchemy
 alembic
 psycopg2-binary
+argon2-cffi
+pyjwt
+pydantic[email]
