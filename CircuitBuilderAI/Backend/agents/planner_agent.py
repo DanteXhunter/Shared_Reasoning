@@ -34,6 +34,11 @@ COLUMNAS_IZQUIERDA = ["a", "b", "c", "d", "e"]
 COLUMNAS_DERECHA = ["f", "g", "h", "i", "j"]
 TOTAL_FILAS = 30
 
+# Tipos de componente que representan una fuente de alimentación externa.
+# Estos no se posicionan en filas del protoboard — el usuario los conecta manualmente a los rieles.
+TIPOS_FUENTE = {"fuente", "batería", "bateria", "battery", "voltaje", "voltage",
+                "power", "alimentacion", "suministro", "regulador", "supply", "pila"}
+
 
 def crear_modelo(proveedor: str) -> ChatOpenAI:
     config = MODELOS_LANGGRAPH.get(proveedor)
@@ -57,29 +62,46 @@ def crear_modelo(proveedor: str) -> ChatOpenAI:
 # ALGORITMO DE POSICIONAMIENTO (sin LLM)
 # ─────────────────────────────────────────────
 
-def calcular_posiciones(netlist: dict) -> dict:
+def calcular_posiciones(netlist: dict, overrides: Optional[dict] = None) -> dict:
     """
     Asigna coordenadas físicas a cada componente del netlist.
     Cada componente ocupa una fila. Sus pines van en columnas b y g,
     cruzando el gap central del protoboard.
+
+    overrides: {comp_id: fila} — fuerza esa fila para el componente indicado.
+    Los demás componentes se asignan secuencialmente evitando las filas reservadas.
+
     Retorna un diccionario: componente_id -> {pin -> {fila, columna}}
     """
     posiciones = {}
+    filas_reservadas = set(overrides.values()) if overrides else set()
     fila_actual = 1
 
     for componente in netlist.get("componentes", []):
         comp_id = componente["id"]
+        tipo = componente.get("tipo", "").lower()
+
+        # Las fuentes de alimentación no ocupan filas — el usuario las conecta a los rieles externamente.
+        if any(k in tipo for k in TIPOS_FUENTE):
+            continue
+
         pines = componente.get("pines", [])
         posiciones[comp_id] = {}
+
+        if overrides and comp_id in overrides:
+            fila = overrides[comp_id]
+        else:
+            while fila_actual in filas_reservadas:
+                fila_actual += 1
+            fila = fila_actual
+            fila_actual += 2
 
         for i, pin in enumerate(pines):
             columna = "b" if i % 2 == 0 else "g"
             posiciones[comp_id][pin["nombre"]] = {
-                "fila": fila_actual,
+                "fila": fila,
                 "columna": columna,
             }
-
-        fila_actual += 2  # Dejar una fila de separación entre componentes
 
     return posiciones
 
@@ -100,7 +122,7 @@ def calcular_cables(netlist: dict, posiciones: dict) -> list:
         destino_coord = _resolver_coordenada(destino_str, posiciones)
 
         if origen_coord and destino_coord:
-            color = _elegir_color_cable(destino_str)
+            color = _elegir_color_cable(origen_str, destino_str)
             cables.append({
                 "de": origen_str,
                 "a": destino_str,
@@ -135,11 +157,12 @@ def _resolver_coordenada(referencia: str, posiciones: dict) -> Optional[dict]:
     return None
 
 
-def _elegir_color_cable(destino: str) -> str:
-    destino_upper = destino.upper()
-    if destino_upper in ["VCC", "+V", "V+", "ALIMENTACION", "PWR"]:
+def _elegir_color_cable(origen: str, destino: str) -> str:
+    NODOS_POSITIVOS = {"VCC", "+V", "V+", "ALIMENTACION", "PWR"}
+    NODOS_NEGATIVOS = {"GND", "GRD", "TIERRA", "0V", "VSS"}
+    if origen.upper() in NODOS_POSITIVOS or destino.upper() in NODOS_POSITIVOS:
         return "rojo"
-    if destino_upper in ["GND", "GRD", "TIERRA", "0V", "VSS"]:
+    if origen.upper() in NODOS_NEGATIVOS or destino.upper() in NODOS_NEGATIVOS:
         return "negro"
     return "amarillo"
 
@@ -156,7 +179,8 @@ def nodo_planificar(estado: EstadoGlobal) -> dict:
     intento = estado["planner_intento"]
     errores = estado["planner_errores"]
 
-    posiciones = calcular_posiciones(netlist)
+    overrides = estado.get("planner_posiciones_override")
+    posiciones = calcular_posiciones(netlist, overrides)
     cables = calcular_cables(netlist, posiciones)
 
     prompt_modo = {
@@ -257,6 +281,50 @@ Reglas:
     }
 
 
+DESCRIPCION_FUENTE = {
+    ModoInteraccion.UNDER: (
+        "Antes de colocar cualquier componente, conecta tu fuente de alimentación a la protoboard: "
+        "el cable ROJO va al riel marcado con '+' (riel positivo, la tira roja) y el cable NEGRO "
+        "va al riel marcado con '-' (riel negativo, la tira azul). "
+        "Piénsalo como enchufar la energía antes de armar el circuito — sin esto, nada funcionará."
+    ),
+    ModoInteraccion.ALONG: (
+        "Podrías empezar conectando tu fuente de alimentación a los rieles de la protoboard: "
+        "positivo al riel '+' y negativo al riel '-'. ¿Tienes lista tu batería o módulo de alimentación?"
+    ),
+    ModoInteraccion.OVER: "Conecta la fuente: positivo → riel +, negativo → riel -.",
+    ModoInteraccion.IN: (
+        "Conecta tu fuente de alimentación: cable rojo al riel '+' y cable negro al riel '-'. "
+        "¿Listo para continuar?"
+    ),
+    ModoInteraccion.ON: (
+        "Paso previo obligatorio: conecta tu fuente de alimentación a los rieles de la protoboard "
+        "(positivo al '+', negativo al '-') antes de proceder con el armado."
+    ),
+}
+
+
+def _asegurar_paso_fuente(pasos: list, modo: ModoInteraccion) -> list:
+    """Garantiza que el primer paso siempre sea conectar la fuente de alimentación a los rieles."""
+    tiene_fuente = any(p.get("tipo") == "conectar_fuente" for p in pasos)
+    if tiene_fuente:
+        return pasos
+
+    descripcion = DESCRIPCION_FUENTE.get(modo, DESCRIPCION_FUENTE[ModoInteraccion.UNDER])
+    paso_fuente = {
+        "numero": 1,
+        "tipo": "conectar_fuente",
+        "componente_id": None,
+        "componente_tipo": "fuente",
+        "componente_valor": None,
+        "descripcion": descripcion,
+        "pines": None,
+        "cable": None,
+    }
+    pasos_renumerados = [{**p, "numero": p["numero"] + 1} for p in pasos]
+    return [paso_fuente] + pasos_renumerados
+
+
 def nodo_validar_plan(estado: EstadoGlobal) -> dict:
     texto_raw = estado["planner_respuesta_raw"] or ""
     texto = texto_raw.strip().replace("```json", "").replace("```", "").strip()
@@ -282,8 +350,11 @@ def nodo_validar_plan(estado: EstadoGlobal) -> dict:
                 "planner_exito": False,
             }
 
+    modo = estado.get("modo_interaccion", ModoInteraccion.UNDER)
+    pasos = _asegurar_paso_fuente(datos["pasos"], modo)
+
     return {
-        "planner_instrucciones": datos["pasos"],
+        "planner_instrucciones": pasos,
         "planner_exito": True,
     }
 

@@ -231,7 +231,7 @@ function Bienvenida({ onListo, nivel }: Props) {
 
               {error && (
                 <div className="rounded-xl px-3 py-2 text-sm flex items-start gap-2" style={{ background: 'rgba(220,38,38,.12)', border: '1px solid rgba(220,38,38,.4)', color: '#fca5a5' }}>
-                  <span>⚠️</span><span>{error}</span>
+                  <span>⚠️</span><span className="whitespace-pre-line">{error}</span>
                 </div>
               )}
             </div>
