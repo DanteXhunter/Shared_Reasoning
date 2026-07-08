@@ -18,13 +18,17 @@ export async function analizarEsquematico(
   const data = await res.json().catch(() => null)
 
   if (!res.ok) {
-    // FastAPI manda el error en "detail" (string u objeto)
     const detalle = data?.detail
-    const mensaje =
-      typeof detalle === 'string'
-        ? detalle
-        : detalle?.mensaje ?? JSON.stringify(detalle ?? res.statusText)
-    throw new Error(mensaje)
+    if (typeof detalle === 'string') {
+      throw new Error(detalle)
+    }
+    const base: string = detalle?.mensaje ?? JSON.stringify(detalle ?? res.statusText)
+    const errores: string[] = detalle?.errores ?? []
+    const ultimoError = errores.at(-1)
+    if (!ultimoError) throw new Error(base)
+    // Separa cada oración del motivo en su propia línea (". Mayúscula" → salto de línea)
+    const motivo = ultimoError.replace(/\. ([A-ZÁÉÍÓÚÑ])/g, '.\n$1')
+    throw new Error(`${base}\nMotivo: ${motivo}`)
   }
 
   return data as RespuestaAnalizar

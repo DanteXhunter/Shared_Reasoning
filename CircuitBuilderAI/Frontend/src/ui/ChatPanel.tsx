@@ -1,36 +1,75 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowUp } from 'lucide-react'
 import { BlobMascota } from './Logo'
+import { enviarMensajeChat } from '../api/chat'
+import type { MensajeHistorial } from '../api/chat'
+import type { Instruccion, Netlist } from '../circuit/types'
 
 export type Mensaje = { de: 'ai' | 'tu'; texto: string }
-
-// Respuesta fija: el agente de chat del backend aún no existe (cascarón §11.C).
-const RESPUESTA_EN_CONSTRUCCION =
-  '🚧 El asistente de chat está en construcción — pronto podré responderte aquí. ' +
-  'Por ahora, sigue los pasos con las flechas ← → del panel derecho.'
 
 type Props = {
   mensajes: Mensaje[]
   onMensajes: (m: Mensaje[]) => void
+  netlist: Netlist | null
+  instrucciones: Instruccion[]
+  proveedor: string
+  nivel: string
+  onInstruccionesActualizadas: (instrucciones: Instruccion[]) => void
 }
 
-// Conversación del chat (estilo mockup: burbujas del usuario en acento,
-// Blob como avatar de la IA). Llena el alto del contenedor padre;
-// el colapso/expansión lo maneja VistaPrincipal.
-function ChatPanel({ mensajes, onMensajes }: Props) {
+function ChatPanel({ mensajes, onMensajes, netlist, instrucciones, proveedor, nivel, onInstruccionesActualizadas }: Props) {
   const [texto, setTexto] = useState('')
+  const [cargando, setCargando] = useState(false)
+  const [historial, setHistorial] = useState<MensajeHistorial[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  // Auto-scroll al último mensaje.
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
-  }, [mensajes])
+  }, [mensajes, cargando])
 
-  function enviar() {
+  async function enviar() {
     const limpio = texto.trim()
-    if (!limpio) return
-    onMensajes([...mensajes, { de: 'tu', texto: limpio }, { de: 'ai', texto: RESPUESTA_EN_CONSTRUCCION }])
+    if (!limpio || !netlist || cargando) return
+
+    const nuevoMensajeHistorial: MensajeHistorial = { rol: 'user', contenido: limpio }
+    const nuevoHistorial = [...historial, nuevoMensajeHistorial]
+
+    setHistorial(nuevoHistorial)
+    onMensajes([...mensajes, { de: 'tu', texto: limpio }])
     setTexto('')
+    setCargando(true)
+
+    await enviarMensajeChat({
+      netlist,
+      historial: nuevoHistorial,
+      proveedor,
+      nivel,
+      instrucciones,
+      onEvento: (evento) => {
+        if (evento.tipo === 'estado') return
+
+        if (evento.tipo === 'respuesta') {
+          const respuesta: MensajeHistorial = { rol: 'assistant', contenido: evento.contenido }
+          setHistorial((h) => [...h, respuesta])
+          onMensajes([...mensajes, { de: 'tu', texto: limpio }, { de: 'ai', texto: evento.contenido }])
+        }
+
+        if (evento.tipo === 'actualizado') {
+          const respuesta: MensajeHistorial = { rol: 'assistant', contenido: evento.respuesta }
+          setHistorial((h) => [...h, respuesta])
+          onMensajes([...mensajes, { de: 'tu', texto: limpio }, { de: 'ai', texto: evento.respuesta }])
+          if (evento.instrucciones_actualizadas) {
+            onInstruccionesActualizadas(evento.instrucciones_actualizadas)
+          }
+        }
+
+        if (evento.tipo === 'error') {
+          onMensajes([...mensajes, { de: 'tu', texto: limpio }, { de: 'ai', texto: `⚠️ ${evento.mensaje}` }])
+        }
+      },
+    })
+
+    setCargando(false)
   }
 
   return (
@@ -53,6 +92,14 @@ function ChatPanel({ mensajes, onMensajes }: Props) {
             </div>
           ),
         )}
+        {cargando && (
+          <div className="flex items-end gap-2">
+            <BlobMascota size={28} className="shrink-0" />
+            <div className="text-sm rounded-2xl rounded-bl-sm px-3 py-2 shadow-sm" style={{ background: 'var(--bg2)', border: '1px solid var(--border)', color: 'var(--ink-soft)' }}>
+              Pensando…
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Entrada */}
@@ -60,14 +107,16 @@ function ChatPanel({ mensajes, onMensajes }: Props) {
         <input
           value={texto}
           onChange={(e) => setTexto(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && enviar()}
-          className="flex-1 rounded-xl px-3 text-sm h-10 outline-none min-w-0"
+          onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && enviar()}
+          disabled={!netlist || cargando}
+          className="flex-1 rounded-xl px-3 text-sm h-10 outline-none min-w-0 disabled:opacity-50"
           style={{ background: 'var(--bg1)', color: 'var(--ink)' }}
-          placeholder="¿Qué te gustaría saber?"
+          placeholder={netlist ? '¿Qué te gustaría saber?' : 'Carga un circuito primero'}
         />
         <button
           onClick={enviar}
-          className="grid place-items-center w-10 h-10 rounded-full hover:brightness-105 transition shadow shrink-0"
+          disabled={!netlist || !texto.trim() || cargando}
+          className="grid place-items-center w-10 h-10 rounded-full hover:brightness-105 transition shadow shrink-0 disabled:opacity-40"
           style={{ background: 'var(--accent)', color: 'var(--bg2)' }}
           title="Enviar"
         >

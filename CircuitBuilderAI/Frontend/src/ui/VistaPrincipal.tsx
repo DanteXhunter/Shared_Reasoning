@@ -58,7 +58,8 @@ function formatTiempo(segundos: number): string {
 // la derecha (paso, instrucción, componente, coordenadas, lista de componentes)
 // y barra de estadísticas abajo.
 function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion }: Props) {
-  const total = sesion.instrucciones.length
+  const [instrucciones, setInstrucciones] = useState(sesion.instrucciones)
+  const total = instrucciones.length
   const [paso, setPaso] = useState(1)
   const [revelado, setRevelado] = useState(true)
   const [tab, setTab] = useState<'simulacion' | 'esquema' | 'codigo'>('simulacion')
@@ -74,12 +75,12 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion }: Props) {
   const [verBiblioteca, setVerBiblioteca] = useState(false)
   const [mensajes, setMensajes] = useState<Mensaje[]>(() =>
     sesion.mensajes ?? [
-      { de: 'ai', texto: `Listo — preparé ${sesion.instrucciones.length} pasos para armar «${sesion.nombre}». Navega con ← → y te muestro cada paso en la protoboard.` },
+      { de: 'ai', texto: `Listo — preparé ${instrucciones.length} pasos para armar «${sesion.nombre}». Navega con ← → y te muestro cada paso en la protoboard.` },
     ],
   )
   const [tiempo, setTiempo] = useState(0)
 
-  const instruccionActiva = sesion.instrucciones.find((i) => i.numero === paso)
+  const instruccionActiva = instrucciones.find((i) => i.numero === paso)
   const interacciones = mensajes.filter((m) => m.de === 'tu').length
 
   // Cronómetro de la sesión — aproximación de "Tiempo" del mockup.
@@ -90,8 +91,8 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion }: Props) {
 
   // Layout del circuito según el paso activo (o completo si revelado está apagado).
   const { componentes, cables, baterias } = useMemo(
-    () => layoutDesdeInstrucciones(sesion.instrucciones, revelado ? paso : undefined),
-    [sesion.instrucciones, revelado, paso],
+    () => layoutDesdeInstrucciones(instrucciones, revelado ? paso : undefined),
+    [instrucciones, revelado, paso],
   )
 
 // Convierte una instrucción "colocar_componente" a la forma que usa la
@@ -294,7 +295,18 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion }: Props) {
             </div>
           ) : (
             /* ---- Conversación a columna completa ---- */
-            <ChatPanel mensajes={mensajes} onMensajes={setMensajes} />
+            <ChatPanel
+              mensajes={mensajes}
+              onMensajes={setMensajes}
+              netlist={sesion.netlist}
+              instrucciones={instrucciones}
+              proveedor={sesion.proveedor}
+              nivel={sesion.nivel}
+              onInstruccionesActualizadas={(nuevas) => {
+                setInstrucciones(nuevas)
+                setPaso(1)
+              }}
+            />
           )}
         </aside>
 
@@ -362,7 +374,7 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion }: Props) {
             </button>
           </div>
           <div className="flex items-center justify-center gap-1.5">
-            {sesion.instrucciones.map((ins) => (
+            {instrucciones.map((ins) => (
               <button
                 key={ins.numero}
                 onClick={() => setPaso(ins.numero)}

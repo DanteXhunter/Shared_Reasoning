@@ -67,3 +67,4 @@ class EstadoGlobal(TypedDict):
     planner_tokens_entrada: int
     planner_tokens_salida: int
     planner_tiempo: float
+    planner_posiciones_override: Optional[dict]  # {comp_id: fila} — sobrescribe calcular_posiciones()
