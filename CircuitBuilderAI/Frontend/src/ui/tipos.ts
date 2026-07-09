@@ -2,7 +2,7 @@ import { Wrench, CircleHelp, BookOpen, type LucideIcon } from 'lucide-react'
 import type { Instruccion, Netlist } from '../circuit/types'
 
 // Proveedores que el agente extractor del backend soporta.
-export const PROVEEDORES = ['openai', 'nemotron', 'llama-vision']
+export const PROVEEDORES = ['gemini', 'openai', 'nemotron', 'llama-vision']
 
 // Qué quiere hacer el usuario con su esquemático (mini-cuestionario de la
 // bienvenida cuando no escribe un prompt).
@@ -19,6 +19,8 @@ export const INTENCIONES: { id: Intencion; Icono: LucideIcon; titulo: string; de
 
 // Todo lo que la pantalla de bienvenida entrega a la vista principal.
 export type Sesion = {
+  // id de la sesión en la BD (#73). Undefined si aún no se persistió.
+  id?: string
   instrucciones: Instruccion[]
   netlist: Netlist | null
   prompt: string
@@ -26,6 +28,9 @@ export type Sesion = {
   proveedor: string
   nombre: string
   nivel: Nivel
+  // Data URL (base64) del esquemático subido, para mostrarlo en la pestaña
+  // "Esquema". Se guarda como data URL (no object URL) para que sobreviva.
+  imagenEsquema?: string
   // Conversación precargada (chats de prueba / futuras sesiones restauradas).
   mensajes?: { de: 'ai' | 'tu'; texto: string }[]
 }

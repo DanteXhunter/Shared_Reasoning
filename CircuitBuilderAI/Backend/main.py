@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from agents.extractor_agent import ejecutar_extractor
 from agents.planner_agent import ejecutar_planner
 from agents.chat_agent_v2 import ejecutar_chat_agent_v2
-from agents.verbosidad import redactar_plan, normalizar_nivel
+from agents.verbosidad import normalizar_nivel
 from agents.estado import ModoInteraccion, MensajeChat
 from db.database import get_db
 from db.models import Usuario, Sesion, ChatMensaje
@@ -19,6 +19,8 @@ from auth import (
     NivelRequest,
     NivelResponse,
     UsuarioResponse,
+    PerfilRequest,
+    ContrasenaRequest,
     hashear_contrasena,
     verificar_contrasena,
     crear_token,
@@ -111,6 +113,7 @@ def registro(datos: RegistroRequest, request: Request, db: Session = Depends(get
         access_token=token,
         usuario_id=str(usuario.id),
         nombre=usuario.nombre,
+        email=usuario.email,
         nivel=usuario.nivel,
         nivel_confirmado=usuario.nivel_confirmado,
     )
@@ -129,6 +132,7 @@ def login(datos: LoginRequest, request: Request, db: Session = Depends(get_db)):
         access_token=token,
         usuario_id=str(usuario.id),
         nombre=usuario.nombre,
+        email=usuario.email,
         nivel=usuario.nivel,
         nivel_confirmado=usuario.nivel_confirmado,
     )
@@ -139,9 +143,53 @@ def usuario_actual(usuario: Usuario = Depends(obtener_usuario_actual)):
     return UsuarioResponse(
         usuario_id=str(usuario.id),
         nombre=usuario.nombre,
+        email=usuario.email,
         nivel=usuario.nivel,
         nivel_confirmado=usuario.nivel_confirmado,
     )
+
+
+@app.patch("/auth/perfil", response_model=UsuarioResponse)
+def actualizar_perfil(
+    datos: PerfilRequest,
+    usuario: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+):
+    if datos.nombre is not None:
+        usuario.nombre = datos.nombre
+
+    if datos.email is not None and datos.email != usuario.email:
+        # Verificación previa por claridad; la restricción UNIQUE es la garantía final.
+        if db.query(Usuario).filter(Usuario.email == datos.email, Usuario.id != usuario.id).first():
+            raise HTTPException(status_code=409, detail="Ya existe una cuenta con este email.")
+        usuario.email = datos.email
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Ya existe una cuenta con este email.")
+    db.refresh(usuario)
+
+    return UsuarioResponse(
+        usuario_id=str(usuario.id),
+        nombre=usuario.nombre,
+        email=usuario.email,
+        nivel=usuario.nivel,
+        nivel_confirmado=usuario.nivel_confirmado,
+    )
+
+
+@app.patch("/auth/contrasena", status_code=204)
+def cambiar_contrasena(
+    datos: ContrasenaRequest,
+    usuario: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+):
+    if not verificar_contrasena(usuario.contrasena_hash, datos.contrasena_actual):
+        raise HTTPException(status_code=400, detail="La contraseña actual es incorrecta.")
+    usuario.contrasena_hash = hashear_contrasena(datos.contrasena_nueva)
+    db.commit()
 
 
 @app.patch("/auth/nivel", response_model=NivelResponse)
@@ -380,6 +428,7 @@ async def planificar_circuito(
         "mime_type": "",
         "proveedor": proveedor,
         "modo_interaccion": ModoInteraccion(modo) if modo in [m.value for m in ModoInteraccion] else ModoInteraccion.UNDER,
+        "nivel": normalizar_nivel(nivel),
         "historial_chat": [],
         "extractor_intento": 0,
         "extractor_errores": [],
@@ -391,7 +440,8 @@ async def planificar_circuito(
         "extractor_tiempo": 0.0,
     }
 
-    # 1) Geometría determinística (correcta por construcción, 0 tokens).
+    # La IA propone el armado YA redactado con la verbosidad del nivel
+    # (agents/planner_agent.py) — sin una segunda llamada de redacción aparte.
     resultado = await ejecutar_planner(estado_extractor)
 
     if resultado.get("error"):
@@ -513,6 +563,7 @@ async def procesar_esquematico(
             "mime_type": "",
             "proveedor": proveedor,
             "modo_interaccion": ModoInteraccion(modo),
+            "nivel": normalizar_nivel(nivel),
             "historial_chat": [],
             "extractor_intento": resultado_extractor["uso"]["intentos"],
             "extractor_errores": [],
@@ -524,6 +575,8 @@ async def procesar_esquematico(
             "extractor_tiempo": resultado_extractor["uso"]["tiempo_segundos"],
         }
 
+        # La IA propone el armado ya redactado con la verbosidad del nivel —
+        # sin una segunda llamada de redacción aparte.
         resultado_planner = await ejecutar_planner(estado_extractor)
 
         if resultado_planner.get("error"):
@@ -539,6 +592,7 @@ async def procesar_esquematico(
         metricas.registrar(tokens_entrada_plan, tokens_salida_plan, proveedor)
         registrar_tokens_usuario(usuario, proveedor, tokens_entrada_plan + tokens_salida_plan)
 
+        instrucciones = resultado_planner["instrucciones"]
         yield _evento_sse("estado", {"mensaje": "Redactando las instrucciones para tu nivel..."})
 
         instrucciones, uso_redaccion = await redactar_plan(
@@ -555,7 +609,6 @@ async def procesar_esquematico(
             "instrucciones": instrucciones,
             "uso_extractor": resultado_extractor["uso"],
             "uso_planner": resultado_planner["uso"],
-            "uso_redaccion": uso_redaccion,
             "metricas": metricas.resumen(proveedor),
         })
 

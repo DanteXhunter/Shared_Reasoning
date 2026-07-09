@@ -44,7 +44,7 @@ class RegistroRequest(BaseModel):
     # Mínimo 12 caracteres (la longitud aporta la mayor parte de la fortaleza).
     # El máximo evita entradas gigantes que saturen el hashing de Argon2.
     contrasena: str = Field(min_length=12, max_length=128)
-    # El nivel NO se pide en el registro: lo decide la encuesta (#72) después.
+    nivel: str = "basico"
 
     @field_validator("contrasena")
     @classmethod
@@ -70,49 +70,7 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     usuario_id: str
     nombre: str
-    email: str
     nivel: str
-    nivel_confirmado: bool
-
-
-class UsuarioResponse(BaseModel):
-    usuario_id: str
-    nombre: str
-    email: str
-    nivel: str
-    nivel_confirmado: bool
-
-
-class PerfilRequest(BaseModel):
-    # Ambos opcionales: se actualiza solo lo que venga. Nombre vacío no se acepta.
-    nombre: str | None = Field(default=None, min_length=1, max_length=100)
-    email: EmailStr | None = None
-
-
-class ContrasenaRequest(BaseModel):
-    contrasena_actual: str
-    contrasena_nueva: str = Field(min_length=12, max_length=128)
-
-    @field_validator("contrasena_nueva")
-    @classmethod
-    def validar_complejidad(cls, valor: str) -> str:
-        # Mismas reglas que el registro (mayúscula, minúscula y número).
-        if not any(c.isupper() for c in valor):
-            raise ValueError("La contraseña debe incluir al menos una mayúscula.")
-        if not any(c.islower() for c in valor):
-            raise ValueError("La contraseña debe incluir al menos una minúscula.")
-        if not any(c.isdigit() for c in valor):
-            raise ValueError("La contraseña debe incluir al menos un número.")
-        return valor
-
-
-class NivelRequest(BaseModel):
-    nivel: str
-
-
-class NivelResponse(BaseModel):
-    nivel: str
-    nivel_confirmado: bool
 
 
 # --- Hashing de contraseñas (Argon2) ---
@@ -147,7 +105,12 @@ def obtener_usuario_actual(
     credenciales: HTTPAuthorizationCredentials = Depends(_bearer),
     db: Session = Depends(get_db),
 ) -> Usuario:
-    """Dependencia para proteger endpoints. Valida el token y devuelve el usuario."""
+    """Dependencia para proteger endpoints. Valida el token y devuelve el usuario.
+
+    Todavía no se aplica a los endpoints existentes (/procesar, /chat, …) porque
+    el frontend aún no envía token; se conectará al implementar la persistencia
+    de sesiones (#73).
+    """
     if not JWT_SECRET_KEY:
         raise RuntimeError("JWT_SECRET_KEY no está configurada en el entorno (.env).")
 
