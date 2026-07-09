@@ -1,4 +1,5 @@
 import type { RespuestaAnalizar } from '../circuit/types'
+import { fetchAutenticado } from './auth'
 
 // URL del backend (viene del .env: VITE_API_URL). Fallback a localhost:8000.
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
@@ -13,7 +14,7 @@ export async function analizarEsquematico(
   form.append('imagen', imagen)
   form.append('proveedor', proveedor)
 
-  const res = await fetch(`${API_URL}/analizar`, { method: 'POST', body: form })
+  const res = await fetchAutenticado(`${API_URL}/analizar`, { method: 'POST', body: form })
 
   const data = await res.json().catch(() => null)
 
