@@ -136,6 +136,16 @@ CircuitBuilderAI/Backend/
 
 ---
 
+## 6.1 Base de datos — conexión a Supabase
+
+**Usar siempre el "Session pooler", nunca la "Direct connection".**
+
+- La conexión directa (`db.<ref>.supabase.co`) solo resuelve por **IPv6** desde 2024 (a menos que se pague el add-on de IPv4 de Supabase). En redes IPv4-only (ej. redes universitarias/corporativas como la de EAFIT) el host es inalcanzable.
+- Síntoma si se usa la directa en una red así: `/auth/login` y `/auth/registro` responden `500`, y el frontend lo muestra como **"Failed to fetch"** (la respuesta 500 sin CORS headers hace que el navegador la bloquee, ocultando la causa real).
+- El pooler (`aws-<n>-<región>.pooler.supabase.com`, puerto 5432, modo sesión) sí tiene IPv4 y funciona en cualquier red. Copiar la cadena exacta desde el dashboard (**Connect → Session pooler**) — el prefijo `aws-0` / `aws-1` es específico de cada proyecto y no es adivinable.
+
+---
+
 ## 7. Providers LLM — estado actual
 
 | Provider | Modelo | Estado | Razón |
