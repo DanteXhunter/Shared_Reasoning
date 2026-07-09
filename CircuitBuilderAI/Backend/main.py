@@ -4,12 +4,13 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from pydantic import BaseModel, Field
 from agents.extractor_agent import ejecutar_extractor
 from agents.planner_agent import ejecutar_planner
 from agents.chat_agent_v2 import ejecutar_chat_agent_v2
 from agents.estado import ModoInteraccion, MensajeChat
 from db.database import get_db
-from db.models import Usuario
+from db.models import Usuario, Sesion, ChatMensaje
 from auth import (
     RegistroRequest,
     LoginRequest,
@@ -23,6 +24,8 @@ from auth import (
     obtener_usuario_actual,
 )
 from metricas import Metricas, LIMITES
+from collections import Counter
+from datetime import datetime
 import json
 import os
 from dotenv import load_dotenv
@@ -142,10 +145,136 @@ def actualizar_nivel(
     return NivelResponse(nivel=usuario.nivel, nivel_confirmado=usuario.nivel_confirmado)
 
 
+# ============================================================
+#  Sesiones (#73) — persistencia del estado del circuito por usuario.
+#  Los esquemas viven aquí (no en un módulo aparte) porque, a diferencia de
+#  auth, no tienen lógica reutilizable: solo describen la forma del request/
+#  response de estos endpoints.
+# ============================================================
+
+class SesionCrear(BaseModel):
+    nombre: str = Field(min_length=1, max_length=200)
+    netlist: dict
+    instrucciones: list
+    modo: str | None = None
+    metricas: dict | None = None
+
+
+class SesionCreada(BaseModel):
+    sesion_id: str
+
+
+class SesionResumen(BaseModel):
+    id: str
+    nombre: str
+    fecha: datetime | None
+    modo_detectado: str | None
+
+
+class SesionCompleta(BaseModel):
+    id: str
+    nombre: str
+    netlist: dict | None
+    instrucciones: list | None
+    modo_detectado: str | None
+    metricas: dict | None
+    fecha: datetime | None
+    historial: list[dict]
+
+
+@app.post("/sesiones", response_model=SesionCreada, status_code=201)
+def crear_sesion(
+    datos: SesionCrear,
+    usuario: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+):
+    sesion = Sesion(
+        usuario_id=usuario.id,
+        nombre=datos.nombre,
+        netlist=datos.netlist,
+        instrucciones=datos.instrucciones,
+        modo_detectado=datos.modo,
+        metricas=datos.metricas,
+    )
+    db.add(sesion)
+    db.commit()
+    db.refresh(sesion)
+    return SesionCreada(sesion_id=str(sesion.id))
+
+
+@app.get("/sesiones", response_model=list[SesionResumen])
+def listar_sesiones(
+    usuario: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+):
+    sesiones = (
+        db.query(Sesion)
+        .filter(Sesion.usuario_id == usuario.id)
+        .order_by(Sesion.fecha.desc())
+        .all()
+    )
+    return [
+        SesionResumen(
+            id=str(s.id),
+            nombre=s.nombre,
+            fecha=s.fecha,
+            modo_detectado=s.modo_detectado,
+        )
+        for s in sesiones
+    ]
+
+
+@app.get("/sesiones/{sesion_id}", response_model=SesionCompleta)
+def obtener_sesion(
+    sesion_id: str,
+    usuario: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+):
+    sesion = _buscar_sesion_del_usuario(db, sesion_id, usuario.id)
+    if sesion is None:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada.")
+
+    mensajes = (
+        db.query(ChatMensaje)
+        .filter(ChatMensaje.sesion_id == sesion.id)
+        .order_by(ChatMensaje.timestamp.asc())
+        .all()
+    )
+    historial = [{"rol": m.rol, "contenido": m.contenido} for m in mensajes]
+
+    return SesionCompleta(
+        id=str(sesion.id),
+        nombre=sesion.nombre,
+        netlist=sesion.netlist,
+        instrucciones=sesion.instrucciones,
+        modo_detectado=sesion.modo_detectado,
+        metricas=sesion.metricas,
+        fecha=sesion.fecha,
+        historial=historial,
+    )
+
+
+def _buscar_sesion_del_usuario(db: Session, sesion_id: str, usuario_id):
+    """Devuelve la sesión solo si pertenece al usuario; None en cualquier otro
+    caso (id inválido, inexistente o de otro usuario). No distingue entre ellos
+    para no filtrar qué sesiones existen."""
+    try:
+        return (
+            db.query(Sesion)
+            .filter(Sesion.id == sesion_id, Sesion.usuario_id == usuario_id)
+            .first()
+        )
+    except Exception:
+        # sesion_id con formato inválido para UUID → tratado como "no encontrada".
+        db.rollback()
+        return None
+
+
 @app.post("/analizar")
 async def analizar_esquematico(
     imagen: UploadFile = File(...),
-    proveedor: str = Form(...)
+    proveedor: str = Form(...),
+    usuario: Usuario = Depends(obtener_usuario_actual),
 ):
     if proveedor not in PROVEEDORES_VALIDOS:
         raise HTTPException(
@@ -203,7 +332,8 @@ async def analizar_esquematico(
 async def planificar_circuito(
     proveedor: str = Form(...),
     modo: str = Form(...),
-    netlist: str = Form(...)
+    netlist: str = Form(...),
+    usuario: Usuario = Depends(obtener_usuario_actual),
 ):
     if proveedor not in PROVEEDORES_VALIDOS:
         raise HTTPException(
@@ -269,7 +399,8 @@ async def planificar_circuito(
 async def procesar_esquematico(
     imagen: UploadFile = File(...),
     proveedor: str = Form(...),
-    modo: str = Form(...)
+    modo: str = Form(...),
+    usuario: Usuario = Depends(obtener_usuario_actual),
 ):
     if proveedor not in PROVEEDORES_VALIDOS:
         raise HTTPException(
@@ -387,6 +518,65 @@ NIVEL_A_MODO = {
 }
 
 
+def _persistir_interaccion_chat(db, sesion, historial_list, resultado, modo, intencion):
+    """Guarda el nuevo par de mensajes (usuario + asistente) como filas
+    ChatMensaje —fuente de verdad del historial—, refleja en la sesión los
+    cambios de circuito que hizo el chat, acumula métricas y recalcula el modo
+    predominante."""
+    modo_valor = modo.value
+
+    # El nuevo mensaje del usuario es el último del historial que envía el
+    # frontend (lo agrega justo antes de mandar la petición).
+    if historial_list and historial_list[-1].get("rol") == "user":
+        db.add(ChatMensaje(
+            sesion_id=sesion.id,
+            rol="user",
+            contenido=historial_list[-1].get("contenido", ""),
+            modo_detectado=modo_valor,
+        ))
+
+    respuesta = resultado.get("respuesta", "")
+    if respuesta:
+        db.add(ChatMensaje(
+            sesion_id=sesion.id,
+            rol="assistant",
+            contenido=respuesta,
+            modo_detectado=modo_valor,
+        ))
+
+    # Si el chat modificó el circuito, la sesión guarda el estado nuevo.
+    if intencion != "responder":
+        if resultado.get("netlist_modificado"):
+            sesion.netlist = resultado["netlist_modificado"]
+        if resultado.get("instrucciones_actualizadas"):
+            sesion.instrucciones = resultado["instrucciones_actualizadas"]
+
+    # Métricas acumuladas. Se reasigna el dict completo para que SQLAlchemy
+    # detecte el cambio en la columna JSONB.
+    uso = resultado.get("uso", {})
+    m = dict(sesion.metricas or {})
+    m["tokens_entrada"] = m.get("tokens_entrada", 0) + uso.get("tokens_entrada", 0)
+    m["tokens_salida"] = m.get("tokens_salida", 0) + uso.get("tokens_salida", 0)
+    m["tokens_total"] = m["tokens_entrada"] + m["tokens_salida"]
+    m["llamadas_llm"] = m.get("llamadas_llm", 0) + 1
+    sesion.metricas = m
+
+    db.commit()
+
+    # Modo predominante = el más frecuente entre los mensajes de la sesión.
+    # (La detección real del modo por mensaje llega en el #82; por ahora se usa
+    # el modo derivado del nivel.)
+    filas = (
+        db.query(ChatMensaje.modo_detectado)
+        .filter(ChatMensaje.sesion_id == sesion.id)
+        .all()
+    )
+    modos = [f[0] for f in filas if f[0]]
+    if modos:
+        sesion.modo_detectado = Counter(modos).most_common(1)[0][0]
+        db.commit()
+
+
 @app.post("/chat")
 async def chat(
     netlist: str = Form(...),
@@ -394,6 +584,9 @@ async def chat(
     proveedor: str = Form(default="openai"),
     nivel: str = Form(default="intermedio"),
     instrucciones: str = Form(default="[]"),
+    sesion_id: str | None = Form(default=None),
+    usuario: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
 ):
     if proveedor not in PROVEEDORES_VALIDOS:
         raise HTTPException(
@@ -421,6 +614,14 @@ async def chat(
         instrucciones_list = json.loads(instrucciones)
     except json.JSONDecodeError:
         instrucciones_list = []
+
+    # Si viene sesion_id, debe pertenecer al usuario. Si no, se responde sin
+    # persistir (la persistencia es opt-in vía sesion_id).
+    sesion = None
+    if sesion_id:
+        sesion = _buscar_sesion_del_usuario(db, sesion_id, usuario.id)
+        if sesion is None:
+            raise HTTPException(status_code=404, detail="Sesión no encontrada.")
 
     modo = NIVEL_A_MODO[nivel]
 
@@ -482,5 +683,13 @@ async def chat(
                 "posiciones_modificadas": resultado.get("posiciones_modificadas"),
                 "uso": resultado.get("uso", {}),
             })
+
+        # Persistencia (#73): solo si la petición trae una sesión válida. Un
+        # fallo al guardar no debe romper la respuesta ya enviada al usuario.
+        if sesion is not None:
+            try:
+                _persistir_interaccion_chat(db, sesion, historial_list, resultado, modo, intencion)
+            except Exception:
+                db.rollback()
 
     return StreamingResponse(generador(), media_type="text/event-stream")
