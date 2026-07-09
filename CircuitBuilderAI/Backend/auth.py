@@ -44,7 +44,7 @@ class RegistroRequest(BaseModel):
     # Mínimo 12 caracteres (la longitud aporta la mayor parte de la fortaleza).
     # El máximo evita entradas gigantes que saturen el hashing de Argon2.
     contrasena: str = Field(min_length=12, max_length=128)
-    nivel: str = "basico"
+    # El nivel NO se pide en el registro: lo decide la encuesta (#72) después.
 
     @field_validator("contrasena")
     @classmethod
@@ -71,6 +71,23 @@ class TokenResponse(BaseModel):
     usuario_id: str
     nombre: str
     nivel: str
+    nivel_confirmado: bool
+
+
+class UsuarioResponse(BaseModel):
+    usuario_id: str
+    nombre: str
+    nivel: str
+    nivel_confirmado: bool
+
+
+class NivelRequest(BaseModel):
+    nivel: str
+
+
+class NivelResponse(BaseModel):
+    nivel: str
+    nivel_confirmado: bool
 
 
 # --- Hashing de contraseñas (Argon2) ---
@@ -105,12 +122,7 @@ def obtener_usuario_actual(
     credenciales: HTTPAuthorizationCredentials = Depends(_bearer),
     db: Session = Depends(get_db),
 ) -> Usuario:
-    """Dependencia para proteger endpoints. Valida el token y devuelve el usuario.
-
-    Todavía no se aplica a los endpoints existentes (/procesar, /chat, …) porque
-    el frontend aún no envía token; se conectará al implementar la persistencia
-    de sesiones (#73).
-    """
+    """Dependencia para proteger endpoints. Valida el token y devuelve el usuario."""
     if not JWT_SECRET_KEY:
         raise RuntimeError("JWT_SECRET_KEY no está configurada en el entorno (.env).")
 

@@ -1,18 +1,47 @@
 import { useState } from 'react'
 import TemaProvider from './theme'
 import { LogoWordmark } from './Logo'
+import { registrar, login, type Usuario } from '../api/auth'
 
-type Props = { onEntrar: () => void }
+type Props = { onEntrar: (usuario: Usuario) => void }
 
-// Login/registro — cascarón visual (issues #84/#85: auth real aún no existe
-// en el backend). "Entrar" simplemente avanza el flujo.
+// Login/registro conectados a /auth/registro y /auth/login (#84/#85).
 function Auth({ onEntrar }: Props) {
   const [tab, setTab] = useState<'login' | 'registro'>('login')
+  const [nombre, setNombre] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [cargando, setCargando] = useState(false)
 
   const inputClass =
     'w-full rounded-xl px-4 py-3 text-sm outline-none transition'
+
+  async function enviar() {
+    setError('')
+
+    if (!email.trim() || !password) {
+      setError('Completa correo y contraseña.')
+      return
+    }
+    if (tab === 'registro' && !nombre.trim()) {
+      setError('Completa tu nombre.')
+      return
+    }
+
+    setCargando(true)
+    try {
+      const usuario =
+        tab === 'login'
+          ? await login(email.trim(), password)
+          : await registrar(nombre.trim(), email.trim(), password)
+      onEntrar(usuario)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Ocurrió un error inesperado.')
+    } finally {
+      setCargando(false)
+    }
+  }
 
   return (
     <TemaProvider tema="light" className="min-h-screen" style={{ background: 'var(--bg1)', color: 'var(--ink)' }}>
@@ -46,10 +75,22 @@ function Auth({ onEntrar }: Props) {
           <form
             onSubmit={(e) => {
               e.preventDefault()
-              onEntrar()
+              enviar()
             }}
             className="space-y-4"
           >
+            {tab === 'registro' && (
+              <div>
+                <label className="block text-sm mb-1.5" style={{ color: 'var(--ink-soft)' }}>Nombre</label>
+                <input
+                  type="text"
+                  value={nombre}
+                  onChange={(e) => setNombre(e.target.value)}
+                  className={inputClass}
+                  style={{ background: 'var(--bg1)', color: 'var(--ink)' }}
+                />
+              </div>
+            )}
             <div>
               <label className="block text-sm mb-1.5" style={{ color: 'var(--ink-soft)' }}>Correo Electrónico</label>
               <input
@@ -69,14 +110,33 @@ function Auth({ onEntrar }: Props) {
                 className={inputClass}
                 style={{ background: 'var(--bg1)', color: 'var(--ink)' }}
               />
+              {tab === 'registro' && (
+                <p className="text-xs mt-1.5" style={{ color: 'var(--ink-soft)' }}>
+                  Mínimo 12 caracteres, con mayúscula, minúscula y número.
+                </p>
+              )}
             </div>
+
+            {error && (
+              <div
+                className="rounded-xl px-3 py-2 text-sm flex items-start gap-2"
+                style={{ background: 'rgba(220,38,38,.12)', border: '1px solid rgba(220,38,38,.4)', color: '#fca5a5' }}
+              >
+                <span>⚠️</span><span className="whitespace-pre-line">{error}</span>
+              </div>
+            )}
 
             <button
               type="submit"
-              className="w-full py-3 rounded-full font-bold shadow-lg hover:brightness-105 active:scale-[0.98] transition"
+              disabled={cargando}
+              className="w-full py-3 rounded-full font-bold shadow-lg hover:brightness-105 active:scale-[0.98] transition disabled:opacity-60"
               style={{ background: 'var(--accent)', color: 'var(--bg2)' }}
             >
-              {tab === 'login' ? 'Entrar a la mesa de trabajo' : 'Crear cuenta y entrar'}
+              {cargando
+                ? 'Un momento...'
+                : tab === 'login'
+                  ? 'Entrar a la mesa de trabajo'
+                  : 'Crear cuenta y entrar'}
             </button>
           </form>
         </div>

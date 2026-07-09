@@ -1,4 +1,5 @@
 import type { Instruccion, Netlist } from '../circuit/types'
+import { fetchAutenticado } from './auth'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
@@ -34,7 +35,7 @@ export async function enviarMensajeChat(params: {
   form.append('nivel', nivel)
   form.append('instrucciones', JSON.stringify(instrucciones))
 
-  const res = await fetch(`${API_URL}/chat`, { method: 'POST', body: form })
+  const res = await fetchAutenticado(`${API_URL}/chat`, { method: 'POST', body: form })
 
   if (!res.ok || !res.body) {
     const data = await res.json().catch(() => null)

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   FilePlus2, History, PanelLeft, ArrowLeft, ArrowRight,
-  Eye, EyeOff, Code, User, LayoutGrid, ChevronDown, X,
+  Eye, EyeOff, Code, User, LayoutGrid, ChevronDown, X, Settings, LogOut,
 } from 'lucide-react'
 import Protoboard from '../components/Protoboard'
 import ComponentGallery from '../components/ComponentGallery'
@@ -23,6 +23,7 @@ type Props = {
   onDev: () => void
   // Cambia a otra sesión (ej. abrir un chat del historial).
   onCargarSesion: (s: Sesion) => void
+  onCerrarSesion: () => void
 }
 
 const NOMBRE_NIVEL: Record<Sesion['nivel'], string> = { basico: 'Básico', intermedio: 'Intermedio', experto: 'Experto' }
@@ -57,13 +58,14 @@ function formatTiempo(segundos: number): string {
 // top nav con tabs, sidebar de chats, protoboard central, panel de detalle a
 // la derecha (paso, instrucción, componente, coordenadas, lista de componentes)
 // y barra de estadísticas abajo.
-function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion }: Props) {
+function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion, onCerrarSesion }: Props) {
   const [instrucciones, setInstrucciones] = useState(sesion.instrucciones)
   const total = instrucciones.length
   const [paso, setPaso] = useState(1)
   const [revelado, setRevelado] = useState(true)
   const [tab, setTab] = useState<'simulacion' | 'esquema' | 'codigo'>('simulacion')
   const [chatAbierto, setChatAbierto] = useState(true)
+  const [menuUsuarioAbierto, setMenuUsuarioAbierto] = useState(false)
   // Ancho arrastrable de la columna de chat (issue: chat responsivo).
   const [anchoChat, setAnchoChat] = useState(ANCHO_CHAT_DEFAULT)
   const asideRef = useRef<HTMLDivElement>(null)
@@ -207,8 +209,48 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion }: Props) {
         <button onClick={onDev} className="grid place-items-center w-9 h-9 rounded-lg hover:bg-black/5 transition" style={{ color: 'var(--ink-soft)' }} title="Modo desarrollo">
           <Code size={18} />
         </button>
-        <div className="grid place-items-center w-10 h-10 rounded-full" style={{ background: 'var(--accent)', color: 'var(--bg2)' }} title="Perfil (próximamente)">
-          <User size={20} />
+        <div className="relative">
+          <button
+            onClick={() => setMenuUsuarioAbierto((a) => !a)}
+            className="grid place-items-center w-10 h-10 rounded-full hover:brightness-105 transition"
+            style={{ background: 'var(--accent)', color: 'var(--bg2)' }}
+            title="Cuenta"
+          >
+            <User size={20} />
+          </button>
+
+          {menuUsuarioAbierto && (
+            <>
+              {/* Backdrop invisible para cerrar el menú al hacer clic afuera */}
+              <button
+                className="fixed inset-0 z-10 cursor-default"
+                onClick={() => setMenuUsuarioAbierto(false)}
+                aria-label="Cerrar menú"
+              />
+              <div
+                className="absolute right-0 top-12 z-20 w-48 rounded-xl shadow-lg overflow-hidden py-1"
+                style={{ background: 'var(--bg2)', border: '1px solid var(--border)' }}
+              >
+                <button
+                  disabled
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left opacity-40 cursor-not-allowed"
+                  style={{ color: 'var(--ink)' }}
+                  title="Próximamente"
+                >
+                  <Settings size={16} />
+                  Configuración
+                </button>
+                <button
+                  onClick={() => { setMenuUsuarioAbierto(false); onCerrarSesion() }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-black/5 transition"
+                  style={{ color: 'var(--ink)' }}
+                >
+                  <LogOut size={16} />
+                  Cerrar sesión
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </header>
 
