@@ -53,7 +53,7 @@ export function normalizarTipo(tipo: string): ComponentePlano['kind'] {
   if (t.includes('motor')) return 'motor'
   if (t.includes('integrado') || t.includes('chip') || /\bic\b/.test(t) || /\b555\b/.test(t) || t.includes('amp op') || t.includes('opamp')) return 'ic'
   if (t.includes('pulsador') || t.includes('push') || t.includes('boton')) return 'pushbutton'
-  if (t.includes('fuente') || t.includes('generador') || t.includes('bateria') || t.includes('pila')) return 'source'
+  if (t.includes('fuente') || t.includes('generador') || t.includes('bateria') || t.includes('batería') || t.includes('battery') || t.includes('pila')) return 'source'
   if (t.includes('interruptor') || t.includes('switch')) return 'switch'
   if (t.includes('carga') || t.includes('bombilla') || t.includes('lampara') || t.includes('foco') || t.includes('luz')) return 'bulb'
   return 'generic'
