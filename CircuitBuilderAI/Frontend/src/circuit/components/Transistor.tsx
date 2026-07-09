@@ -17,28 +17,40 @@ type Props = {
 }
 
 function Transistor({ x1, y1, x2, y2, x3, y3 }: Props) {
-  const cx = (x1 + x2) / 2
-  const cy = (y1 + y2) / 2
-  const midX = x3 ?? cx
-  const midY = y3 ?? cy - Math.abs(x2 - x1) * 0.15 // si no hay 3ra pata real, la "sube" un poco
+  // El cuerpo SIEMPRE se centra en la pata del MEDIO (base) — no en el
+  // punto medio entre E y C. Así el dibujo queda anclado a la coordenada
+  // real de la base y nunca se ve "corrido" hacia un lado.
+  const midX = x3 ?? (x1 + x2) / 2
+  const midY = y3 ?? (y1 + y2) / 2 - Math.abs(x2 - x1) * 0.15 // si no hay 3ra pata real, la "sube" un poco
 
-  const cuerpoR = Math.abs(x2 - x1) * 0.22
+  // El radio del cuerpo es FIJO (no proporcional a la separación de las
+  // patas): en esta app las 3 patas pueden quedar muy separadas (ej.
+  // transistor vertical cruzando varias filas — E/B/C en huecos distintos,
+  // no adyacentes como en un TO-92 real). Si el cuerpo escalara con esa
+  // distancia terminaría tapando huecos vecinos; al ser fijo, cada pata
+  // queda unida a su hueco exacto por una pata (recta) más o menos larga,
+  // pero el cuerpo mismo nunca invade huecos que no le corresponden.
+  const cuerpoR = 13
   const cuerpoY = Math.min(y1, y2, midY) - cuerpoR * 1.4 // el cuerpo va ARRIBA de las patas
 
   return (
     <Group>
-      {/* Patas: fanean desde el cuerpo (angosto) hacia los 3 huecos (más separados) */}
-      <Line points={[x1 - cuerpoR * 0.5, cuerpoY + cuerpoR * 0.9, x1, y1]} stroke="#9ca3af" strokeWidth={2} perfectDrawEnabled={false} />
-      <Line points={[cx, cuerpoY + cuerpoR * 0.9, midX, midY]} stroke="#9ca3af" strokeWidth={2} perfectDrawEnabled={false} />
-      <Line points={[x2 + cuerpoR * 0.5, cuerpoY + cuerpoR * 0.9, x2, y2]} stroke="#9ca3af" strokeWidth={2} perfectDrawEnabled={false} />
+      {/* Patas: van desde el punto de anclaje en el cuerpo (fan-out chico y
+          fijo alrededor de midX) hasta el hueco REAL de cada pata — línea
+          continua y diagonal si el hueco queda lejos, para que se vea
+          claramente conectada (antes el punto de partida quedaba pegado
+          al propio hueco y la pata nunca llegaba a tocar el cuerpo). */}
+      <Line points={[midX - cuerpoR * 0.5, cuerpoY + cuerpoR * 0.9, x1, y1]} stroke="#9ca3af" strokeWidth={2} perfectDrawEnabled={false} />
+      <Line points={[midX, cuerpoY + cuerpoR * 0.9, midX, midY]} stroke="#9ca3af" strokeWidth={2} perfectDrawEnabled={false} />
+      <Line points={[midX + cuerpoR * 0.5, cuerpoY + cuerpoR * 0.9, x2, y2]} stroke="#9ca3af" strokeWidth={2} perfectDrawEnabled={false} />
 
       {/* Cuerpo TO-92: semicírculo (domo) + base recta, con gradiente + sombra */}
       <Shape
         sceneFunc={(ctx, shape) => {
           ctx.beginPath()
-          ctx.arc(cx, cuerpoY, cuerpoR, Math.PI, 0, false) // domo superior
-          ctx.lineTo(cx + cuerpoR, cuerpoY + cuerpoR * 0.9)
-          ctx.lineTo(cx - cuerpoR, cuerpoY + cuerpoR * 0.9)
+          ctx.arc(midX, cuerpoY, cuerpoR, Math.PI, 0, false) // domo superior
+          ctx.lineTo(midX + cuerpoR, cuerpoY + cuerpoR * 0.9)
+          ctx.lineTo(midX - cuerpoR, cuerpoY + cuerpoR * 0.9)
           ctx.closePath()
           ctx.fillStrokeShape(shape)
         }}
@@ -56,7 +68,7 @@ function Transistor({ x1, y1, x2, y2, x3, y3 }: Props) {
 
       {/* Cara plana (marca de orientación real del TO-92) */}
       <Rect
-        x={cx - cuerpoR * 0.75}
+        x={midX - cuerpoR * 0.75}
         y={cuerpoY - cuerpoR * 0.15}
         width={cuerpoR * 1.5}
         height={cuerpoR * 1.05}
@@ -67,7 +79,7 @@ function Transistor({ x1, y1, x2, y2, x3, y3 }: Props) {
 
       {/* Brillo superior del domo */}
       <Rect
-        x={cx - cuerpoR * 0.5}
+        x={midX - cuerpoR * 0.5}
         y={cuerpoY - cuerpoR * 0.85}
         width={cuerpoR}
         height={2}

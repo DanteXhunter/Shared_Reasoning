@@ -31,7 +31,7 @@ function railDeNodo(nombre: string): { x: number; y: number } | null {
 //  como terminales etiquetadas para que el circuito se vea completo.
 // ============================================================
 
-function normalizarTipo(tipo: string): ComponentePlano['kind'] {
+export function normalizarTipo(tipo: string): ComponentePlano['kind'] {
   const t = tipo.toLowerCase()
   // OJO al ORDEN: 'fotorresistor'/'sensor de luz' contienen 'resist'/'luz',
   // así que el fotorresistor debe chequearse ANTES que resistor y bulb.
@@ -178,7 +178,7 @@ function coordPlanner(fila: number, columna: string): { x: number; y: number } |
 }
 
 // Nombre de color en español → hex.
-function colorCable(nombre: string): string {
+export function colorCable(nombre: string): string {
   const c = (nombre ?? '').toLowerCase()
   if (c.includes('amarillo')) return '#eab308'
   if (c.includes('negro')) return '#1f2937'
@@ -217,9 +217,12 @@ export function layoutDesdeInstrucciones(instrucciones: Instruccion[], pasoActiv
       }
       const a = coordPlanner(ins.pines[0].fila, ins.pines[0].columna)
       const b = coordPlanner(ins.pines[1].fila, ins.pines[1].columna)
-      // Componentes de 3 patas (ej. transistor): la 3ra pata es opcional en el
-      // JSON del planner — si no viene, el propio componente la aproxima.
-      const c = kind === 'transistor' && ins.pines[2] ? coordPlanner(ins.pines[2].fila, ins.pines[2].columna) : null
+      // Componentes de 3 patas (transistor, potenciómetro, regulador...): la
+      // 3ra pata es opcional en el JSON del planner — si no viene, el propio
+      // componente la aproxima. Antes solo se leía para 'transistor', así que
+      // potenciómetro/regulador perdían su coordenada del medio (issue: el
+      // anillo de esa pata no aparecía).
+      const c = ins.pines[2] ? coordPlanner(ins.pines[2].fila, ins.pines[2].columna) : null
       if (a && b) {
         componentes.push({
           id: ins.componente_id ?? `C${ins.numero}`,
@@ -287,6 +290,48 @@ export const EJEMPLO_SENSOR_LUZ: Instruccion[] = [
   { numero: 12, tipo: 'colocar_componente', componente_id: 'R3', componente_tipo: 'resistencia', componente_valor: '220', descripcion: 'Coloca R3 (220 Ω, limitadora del LED) en la fila 18, entre b y f.', pines: [{ nombre: 'pin1', fila: 18, columna: 'b' }, { nombre: 'pin2', fila: 18, columna: 'f' }], cable: null },
   { numero: 13, tipo: 'conectar_cable', componente_id: null, componente_tipo: null, componente_valor: null, descripcion: 'Cable amarillo de 14a a 18a: une el ánodo del LED con R3.', pines: null, cable: { color: 'amarillo', desde: { fila: 14, columna: 'a' }, hasta: { fila: 18, columna: 'a' } } },
   { numero: 14, tipo: 'conectar_cable', componente_id: null, componente_tipo: null, componente_valor: null, descripcion: 'Cable rojo de 18g al riel +: R3 queda alimentada y el circuito completo. Tapa el LDR con la mano: ¡el LED enciende!', pines: null, cable: { color: 'rojo', desde: { fila: 18, columna: 'g' }, hasta: { fila: 18, columna: '+' } } },
+]
+
+// ============================================================
+//  VITRINA de componentes (sin sentido eléctrico — es solo para QA
+//  visual): un componente por fila, para revisar rápido cómo se ve
+//  la miniatura recortada (MiniComponente) de cada tipo del catálogo
+//  en la tarjeta "Componente(s)" del panel de la vista principal.
+// ============================================================
+const VITRINA_2_PATAS: [string, string, string][] = [
+  ['R1', 'resistencia', '10k'],
+  ['D1', 'diodo', '1N4007'],
+  ['LED1', 'led', 'rojo'],
+  ['C1', 'capacitor', '100nF'],
+  ['C2', 'electrolitico', '100uF'],
+  ['L1', 'inductor', '10mH'],
+  ['F1', 'fusible', '1A'],
+  ['SW1', 'interruptor', ''],
+  ['SB1', 'pulsador', ''],
+  ['LDR1', 'fotorresistor', 'GL5528'],
+  ['BZ1', 'buzzer', ''],
+  ['X1', 'cristal', '16MHz'],
+  ['DS1', 'display 7 segmentos', ''],
+  ['M1', 'motor', ''],
+  ['LMP1', 'bombilla', ''],
+]
+
+export const EJEMPLO_VITRINA_COMPONENTES: Instruccion[] = [
+  ...VITRINA_2_PATAS.map(([id, tipo, valor], i): Instruccion => ({
+    numero: i + 1,
+    tipo: 'colocar_componente',
+    componente_id: id,
+    componente_tipo: tipo,
+    componente_valor: valor || null,
+    descripcion: `Coloca ${id} en la fila ${i + 1}, entre b y f (solo para ver su miniatura).`,
+    pines: [{ nombre: 'pin1', fila: i + 1, columna: 'b' }, { nombre: 'pin2', fila: i + 1, columna: 'f' }],
+    cable: null,
+  })),
+  { numero: 16, tipo: 'colocar_componente', componente_id: 'Q1', componente_tipo: 'transistor', componente_valor: '2N2222', descripcion: 'Coloca Q1 en la fila 16 (solo para ver su miniatura).', pines: [{ nombre: 'emisor', fila: 16, columna: 'b' }, { nombre: 'colector', fila: 16, columna: 'f' }, { nombre: 'base', fila: 16, columna: 'd' }], cable: null },
+  { numero: 17, tipo: 'colocar_componente', componente_id: 'P1', componente_tipo: 'potenciometro', componente_valor: '10k', descripcion: 'Coloca P1 en la fila 17 (solo para ver su miniatura).', pines: [{ nombre: 'pin1', fila: 17, columna: 'b' }, { nombre: 'pin2', fila: 17, columna: 'f' }, { nombre: 'wiper', fila: 17, columna: 'd' }], cable: null },
+  { numero: 18, tipo: 'colocar_componente', componente_id: 'U1', componente_tipo: 'regulador 7805', componente_valor: '7805', descripcion: 'Coloca U1 en la fila 18 (solo para ver su miniatura).', pines: [{ nombre: 'vin', fila: 18, columna: 'b' }, { nombre: 'vout', fila: 18, columna: 'f' }, { nombre: 'gnd', fila: 18, columna: 'd' }], cable: null },
+  { numero: 19, tipo: 'colocar_componente', componente_id: 'K1', componente_tipo: 'rele', componente_valor: null, descripcion: 'Coloca K1 en la fila 19 (solo para ver su miniatura).', pines: [{ nombre: 'pin1', fila: 19, columna: 'b' }, { nombre: 'pin2', fila: 19, columna: 'f' }], cable: null },
+  { numero: 20, tipo: 'colocar_componente', componente_id: 'IC1', componente_tipo: 'circuito integrado', componente_valor: 'NE555', descripcion: 'Coloca IC1 en la fila 20 (solo para ver su miniatura).', pines: [{ nombre: 'pin1', fila: 20, columna: 'b' }, { nombre: 'pin8', fila: 20, columna: 'f' }], cable: null },
 ]
 
 // Netlist de ejemplo (divisor de voltaje) idéntico al que devuelve la IA.
