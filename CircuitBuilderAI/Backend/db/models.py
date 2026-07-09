@@ -18,6 +18,9 @@ class Usuario(Base):
     # comparten el mismo valor por defecto en `nivel`, así que no se pueden
     # diferenciar sin este flag.
     nivel_confirmado = Column(Boolean, nullable=False, default=False)
+    # Admin/superusuario (investigadores): exento del presupuesto de tokens (#76).
+    # Se marca a mano en la base; no hay endpoint para crear admins.
+    es_admin = Column(Boolean, nullable=False, default=False)
     fecha_registro = Column(DateTime(timezone=True), server_default=func.now())
 
 

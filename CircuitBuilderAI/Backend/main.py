@@ -25,6 +25,12 @@ from auth import (
     obtener_usuario_actual,
 )
 from metricas import Metricas, LIMITES
+from rate_limit import (
+    verificar_frecuencia,
+    verificar_presupuesto_tokens,
+    registrar_tokens_usuario,
+    FRECUENCIA_AUTH,
+)
 from collections import Counter
 from datetime import datetime
 import json
@@ -75,8 +81,13 @@ async def root():
     }
 
 
+def _ip_de(request: Request) -> str:
+    return request.client.host if request.client else "desconocida"
+
+
 @app.post("/auth/registro", response_model=TokenResponse, status_code=201)
-def registro(datos: RegistroRequest, db: Session = Depends(get_db)):
+def registro(datos: RegistroRequest, request: Request, db: Session = Depends(get_db)):
+    verificar_frecuencia(f"auth:{_ip_de(request)}", FRECUENCIA_AUTH)
     # Verificación previa por email (mensaje claro). La restricción UNIQUE de la
     # BD es la garantía final ante condiciones de carrera.
     if db.query(Usuario).filter(Usuario.email == datos.email).first():
@@ -106,7 +117,8 @@ def registro(datos: RegistroRequest, db: Session = Depends(get_db)):
 
 
 @app.post("/auth/login", response_model=TokenResponse)
-def login(datos: LoginRequest, db: Session = Depends(get_db)):
+def login(datos: LoginRequest, request: Request, db: Session = Depends(get_db)):
+    verificar_frecuencia(f"auth:{_ip_de(request)}", FRECUENCIA_AUTH)
     usuario = db.query(Usuario).filter(Usuario.email == datos.email).first()
     # Mensaje genérico a propósito: no revela si el email existe (evita enumeración).
     if usuario is None or not verificar_contrasena(usuario.contrasena_hash, datos.contrasena):
@@ -283,6 +295,9 @@ async def analizar_esquematico(
             detail=f"Proveedor '{proveedor}' no válido. Valores válidos: {PROVEEDORES_VALIDOS}"
         )
 
+    verificar_frecuencia(f"user:{usuario.id}")
+    verificar_presupuesto_tokens(usuario, proveedor)
+
     if not metricas.puede_hacer_peticion(proveedor):
         raise HTTPException(
             status_code=429,
@@ -323,6 +338,7 @@ async def analizar_esquematico(
     tokens_entrada = resultado.get("uso", {}).get("tokens_entrada", 0)
     tokens_salida = resultado.get("uso", {}).get("tokens_salida", 0)
     metricas.registrar(tokens_entrada, tokens_salida, proveedor)
+    registrar_tokens_usuario(usuario, proveedor, tokens_entrada + tokens_salida)
 
     resultado["metricas"] = metricas.resumen(proveedor)
 
@@ -349,6 +365,15 @@ async def planificar_circuito(
         netlist_dict = json.loads(netlist)
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="El campo 'netlist' no es un JSON válido.")
+
+    verificar_frecuencia(f"user:{usuario.id}")
+    verificar_presupuesto_tokens(usuario, proveedor)
+
+    if not metricas.puede_hacer_peticion(proveedor):
+        raise HTTPException(
+            status_code=429,
+            detail="Se agotaron las peticiones diarias para este modelo. Cambia de proveedor o espera hasta mañana."
+        )
 
     estado_extractor = {
         "imagen_base64": "",
@@ -379,6 +404,11 @@ async def planificar_circuito(
             }
         )
 
+    tokens_entrada = resultado.get("uso", {}).get("tokens_entrada", 0)
+    tokens_salida = resultado.get("uso", {}).get("tokens_salida", 0)
+    metricas.registrar(tokens_entrada, tokens_salida, proveedor)
+    registrar_tokens_usuario(usuario, proveedor, tokens_entrada + tokens_salida)
+
     # 2) Redacción por nivel (solo el texto; si falla, quedan las básicas).
     instrucciones, uso_redaccion = await redactar_plan(
         resultado["instrucciones"], normalizar_nivel(nivel), netlist_dict, proveedor
@@ -386,6 +416,10 @@ async def planificar_circuito(
     resultado["instrucciones"] = instrucciones
     resultado["uso_redaccion"] = uso_redaccion
     metricas.registrar(uso_redaccion.get("tokens_entrada", 0), uso_redaccion.get("tokens_salida", 0), "openai")
+    registrar_tokens_usuario(
+        usuario, "openai",
+        uso_redaccion.get("tokens_entrada", 0) + uso_redaccion.get("tokens_salida", 0),
+    )
 
     resultado["metricas"] = metricas.resumen(proveedor)
 
@@ -405,6 +439,19 @@ async def procesar_esquematico(
             status_code=400,
             detail=f"Proveedor '{proveedor}' no válido. Valores válidos: {PROVEEDORES_VALIDOS}"
         )
+
+    # Diego quitó esta validación en dev al refactorizar (modo ahora tiene
+    # default seguro), pero más abajo sigue usando ModoInteraccion(modo) sin
+    # resguardo — un valor inválido tronaría con 500. La conservo para que siga
+    # siendo un 400 claro.
+    if modo not in [m.value for m in ModoInteraccion]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Modo '{modo}' no válido. Valores válidos: {[m.value for m in ModoInteraccion]}"
+        )
+
+    verificar_frecuencia(f"user:{usuario.id}")
+    verificar_presupuesto_tokens(usuario, proveedor)
 
     if imagen.content_type not in TIPOS_IMAGEN_VALIDOS:
         raise HTTPException(
@@ -447,6 +494,7 @@ async def procesar_esquematico(
         tokens_entrada_ext = resultado_extractor.get("uso", {}).get("tokens_entrada", 0)
         tokens_salida_ext = resultado_extractor.get("uso", {}).get("tokens_salida", 0)
         metricas.registrar(tokens_entrada_ext, tokens_salida_ext, proveedor)
+        registrar_tokens_usuario(usuario, proveedor, tokens_entrada_ext + tokens_salida_ext)
 
         netlist = resultado_extractor["resultado"]
         num_componentes = len(netlist.get("componentes", []))
@@ -489,6 +537,7 @@ async def procesar_esquematico(
         tokens_entrada_plan = resultado_planner.get("uso", {}).get("tokens_entrada", 0)
         tokens_salida_plan = resultado_planner.get("uso", {}).get("tokens_salida", 0)
         metricas.registrar(tokens_entrada_plan, tokens_salida_plan, proveedor)
+        registrar_tokens_usuario(usuario, proveedor, tokens_entrada_plan + tokens_salida_plan)
 
         yield _evento_sse("estado", {"mensaje": "Redactando las instrucciones para tu nivel..."})
 
@@ -496,6 +545,10 @@ async def procesar_esquematico(
             resultado_planner["instrucciones"], normalizar_nivel(nivel), netlist, proveedor
         )
         metricas.registrar(uso_redaccion.get("tokens_entrada", 0), uso_redaccion.get("tokens_salida", 0), "openai")
+        registrar_tokens_usuario(
+            usuario, "openai",
+            uso_redaccion.get("tokens_entrada", 0) + uso_redaccion.get("tokens_salida", 0),
+        )
 
         yield _evento_sse("completo", {
             "mensaje": f"Listo, {len(instrucciones)} pasos generados",
@@ -592,6 +645,9 @@ async def chat(
             detail=f"Proveedor '{proveedor}' no válido. Valores válidos: {PROVEEDORES_VALIDOS}"
         )
 
+    verificar_frecuencia(f"user:{usuario.id}")
+    verificar_presupuesto_tokens(usuario, proveedor)
+
     if nivel not in NIVEL_A_MODO:
         raise HTTPException(
             status_code=400,
@@ -662,6 +718,14 @@ async def chat(
             return
 
         intencion = resultado.get("intencion_detectada", "responder")
+
+        # El chat consume tokens en cualquier intención, así que se acumulan al
+        # presupuesto del usuario aquí (no solo en la rama de modificación).
+        uso_chat = resultado.get("uso", {})
+        registrar_tokens_usuario(
+            usuario, proveedor,
+            uso_chat.get("tokens_entrada", 0) + uso_chat.get("tokens_salida", 0),
+        )
 
         if intencion == "responder":
             yield _evento_sse("respuesta", {
