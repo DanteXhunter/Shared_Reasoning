@@ -4,16 +4,16 @@ import { fetchAutenticado } from './auth'
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
 // Envía el netlist al planner y devuelve las instrucciones paso a paso
-// (con coordenadas reales de protoboard). El modo es un ModoInteraccion
-// válido del backend: UNDER | OVER | ALONG | IN | ON.
+// (con coordenadas reales de protoboard). La geometría es determinística en el
+// backend; `nivel` (basico|intermedio|experto) ajusta la verbosidad del texto.
 export async function planificarCircuito(
   netlist: Netlist,
   proveedor: string,
-  modo: string,
+  nivel: string,
 ): Promise<RespuestaPlanner> {
   const form = new FormData()
   form.append('proveedor', proveedor)
-  form.append('modo', modo)
+  form.append('nivel', nivel)
   form.append('netlist', JSON.stringify(netlist))
 
   const res = await fetchAutenticado(`${API_URL}/planificar`, { method: 'POST', body: form })
