@@ -14,9 +14,13 @@ from auth import (
     RegistroRequest,
     LoginRequest,
     TokenResponse,
+    NivelRequest,
+    NivelResponse,
+    UsuarioResponse,
     hashear_contrasena,
     verificar_contrasena,
     crear_token,
+    obtener_usuario_actual,
 )
 from metricas import Metricas, LIMITES
 import json
@@ -78,7 +82,6 @@ def registro(datos: RegistroRequest, db: Session = Depends(get_db)):
         nombre=datos.nombre,
         email=datos.email,
         contrasena_hash=hashear_contrasena(datos.contrasena),
-        nivel=datos.nivel,
     )
     db.add(usuario)
     try:
@@ -94,6 +97,7 @@ def registro(datos: RegistroRequest, db: Session = Depends(get_db)):
         usuario_id=str(usuario.id),
         nombre=usuario.nombre,
         nivel=usuario.nivel,
+        nivel_confirmado=usuario.nivel_confirmado,
     )
 
 
@@ -110,7 +114,32 @@ def login(datos: LoginRequest, db: Session = Depends(get_db)):
         usuario_id=str(usuario.id),
         nombre=usuario.nombre,
         nivel=usuario.nivel,
+        nivel_confirmado=usuario.nivel_confirmado,
     )
+
+
+@app.get("/auth/me", response_model=UsuarioResponse)
+def usuario_actual(usuario: Usuario = Depends(obtener_usuario_actual)):
+    return UsuarioResponse(
+        usuario_id=str(usuario.id),
+        nombre=usuario.nombre,
+        nivel=usuario.nivel,
+        nivel_confirmado=usuario.nivel_confirmado,
+    )
+
+
+@app.patch("/auth/nivel", response_model=NivelResponse)
+def actualizar_nivel(
+    datos: NivelRequest,
+    usuario: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+):
+    usuario.nivel = datos.nivel
+    usuario.nivel_confirmado = True
+    db.commit()
+    db.refresh(usuario)
+
+    return NivelResponse(nivel=usuario.nivel, nivel_confirmado=usuario.nivel_confirmado)
 
 
 @app.post("/analizar")
