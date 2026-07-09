@@ -1,4 +1,5 @@
 import type { RespuestaPlanner, Netlist } from '../circuit/types'
+import { fetchAutenticado } from './auth'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
@@ -15,7 +16,7 @@ export async function planificarCircuito(
   form.append('nivel', nivel)
   form.append('netlist', JSON.stringify(netlist))
 
-  const res = await fetch(`${API_URL}/planificar`, { method: 'POST', body: form })
+  const res = await fetchAutenticado(`${API_URL}/planificar`, { method: 'POST', body: form })
   const data = await res.json().catch(() => null)
 
   if (!res.ok) {

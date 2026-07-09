@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, Text, ForeignKey
+from sqlalchemy import Column, String, DateTime, Text, ForeignKey, Boolean
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
 import uuid
@@ -13,6 +13,11 @@ class Usuario(Base):
     email = Column(String(255), unique=True, nullable=False)
     contrasena_hash = Column(String(255), nullable=False)
     nivel = Column(String(20), nullable=False, default="basico")
+    # True solo cuando el usuario completó la encuesta de nivel (#72). Distingue
+    # "aún no contestó" de "contestó y su respuesta fue básico" — ambos casos
+    # comparten el mismo valor por defecto en `nivel`, así que no se pueden
+    # diferenciar sin este flag.
+    nivel_confirmado = Column(Boolean, nullable=False, default=False)
     fecha_registro = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -27,6 +32,8 @@ class Sesion(Base):
         nullable=False,
         index=True,
     )
+    # Nombre legible del circuito, para listar el historial de sesiones (#73/#88).
+    nombre = Column(String(200), nullable=False, default="Circuito sin nombre")
     netlist = Column(JSONB)
     instrucciones = Column(JSONB)
     historial_chat = Column(JSONB)
