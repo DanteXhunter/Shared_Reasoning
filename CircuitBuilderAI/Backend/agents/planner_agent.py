@@ -1,6 +1,7 @@
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 from agents.estado import EstadoGlobal, ModoInteraccion
+from agents.topologia import generar_instrucciones
 from pydantic import ValidationError
 from typing import Optional
 import json
@@ -385,47 +386,39 @@ def crear_grafo_planner():
 
 
 async def ejecutar_planner(estado_extractor: dict) -> dict:
-    estado_inicial = {
-        **estado_extractor,
-        "planner_intento": 0,
-        "planner_errores": [],
-        "planner_respuesta_raw": None,
-        "planner_instrucciones": None,
-        "planner_exito": False,
-        "planner_tokens_entrada": 0,
-        "planner_tokens_salida": 0,
-        "planner_tiempo": 0.0,
+    """
+    Genera el plan de armado con la capa DETERMINÍSTICA de topología
+    (agents/topologia.py): netlist → nets → coordenadas físicas.
+
+    Es correcto por construcción y no depende del LLM: ninguna conexión se
+    pierde en silencio y la fuente siempre aparece. Las descripciones son
+    básicas; el ajuste de verbosidad por nivel (Fase 2) se hará aparte.
+    """
+    inicio = time.time()
+    netlist = estado_extractor.get("extractor_netlist") or {}
+
+    instrucciones, avisos = generar_instrucciones(netlist)
+    tiempo = round(time.time() - inicio, 4)
+
+    uso = {
+        "tokens_entrada": 0,
+        "tokens_salida": 0,
+        "tokens_total": 0,
+        "intentos": 1,
+        "modelo_activo": "deterministico",
+        "tiempo_segundos": tiempo,
     }
 
-    grafo = crear_grafo_planner()
-    estado_final = await grafo.ainvoke(estado_inicial)
-
-    config = MODELOS_LANGGRAPH.get(estado_extractor["proveedor"], {})
-    modelo_activo = config.get("model", "desconocido")
-
-    if estado_final["planner_exito"]:
-        return {
-            "instrucciones": estado_final["planner_instrucciones"],
-            "uso": {
-                "tokens_entrada": estado_final["planner_tokens_entrada"],
-                "tokens_salida": estado_final["planner_tokens_salida"],
-                "tokens_total": estado_final["planner_tokens_entrada"] + estado_final["planner_tokens_salida"],
-                "intentos": estado_final["planner_intento"],
-                "modelo_activo": modelo_activo,
-                "tiempo_segundos": estado_final["planner_tiempo"],
-            },
-        }
-    else:
+    if not instrucciones:
         return {
             "error": True,
-            "mensaje": f"No se pudo generar un plan válido después de {estado_final['planner_intento']} intentos.",
-            "errores": estado_final["planner_errores"],
-            "uso": {
-                "tokens_entrada": estado_final["planner_tokens_entrada"],
-                "tokens_salida": estado_final["planner_tokens_salida"],
-                "tokens_total": estado_final["planner_tokens_entrada"] + estado_final["planner_tokens_salida"],
-                "intentos": estado_final["planner_intento"],
-                "modelo_activo": modelo_activo,
-                "tiempo_segundos": estado_final["planner_tiempo"],
-            },
+            "mensaje": "El netlist no produjo ningún paso de armado (¿sin componentes o sin conexiones?).",
+            "errores": avisos or ["Netlist vacío o sin componentes colocables."],
+            "uso": uso,
         }
+
+    return {
+        "instrucciones": instrucciones,
+        "avisos": avisos,
+        "uso": uso,
+    }
