@@ -60,7 +60,7 @@ function Bienvenida({ onListo, nivel }: Props) {
       if (!analisis.resultado) throw new Error(analisis.mensaje ?? 'No se pudo leer el esquemático.')
 
       setMensajeCarga('Planificando el armado en la protoboard…')
-      const plan = await planificarCircuito(analisis.resultado, proveedor, 'UNDER')
+      const plan = await planificarCircuito(analisis.resultado, proveedor, nivel)
       if (!plan.instrucciones?.length) throw new Error(plan.mensaje ?? 'El planner no devolvió pasos.')
 
       onListo({
