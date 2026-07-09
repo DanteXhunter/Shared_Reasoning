@@ -6,6 +6,7 @@ const CLAVE_TOKEN = 'paralelo_token'
 export type Usuario = {
   usuarioId: string
   nombre: string
+  email: string
   nivel: Nivel
   nivelConfirmado: boolean
 }
@@ -47,15 +48,22 @@ type RespuestaToken = {
   access_token: string
   usuario_id: string
   nombre: string
+  email: string
   nivel: Nivel
   nivel_confirmado: boolean
 }
 
 function aUsuario(datos: RespuestaToken): Usuario {
   guardarToken(datos.access_token)
+  return aUsuarioDesde(datos)
+}
+
+// Mapea la forma del backend (UsuarioResponse/TokenResponse) al tipo del front.
+function aUsuarioDesde(datos: RespuestaUsuario): Usuario {
   return {
     usuarioId: datos.usuario_id,
     nombre: datos.nombre,
+    email: datos.email,
     nivel: datos.nivel,
     nivelConfirmado: datos.nivel_confirmado,
   }
@@ -111,6 +119,7 @@ export async function fetchAutenticado(url: string, opciones: RequestInit = {}):
 type RespuestaUsuario = {
   usuario_id: string
   nombre: string
+  email: string
   nivel: Nivel
   nivel_confirmado: boolean
 }
@@ -125,11 +134,27 @@ export async function obtenerUsuarioActual(): Promise<Usuario | null> {
   const res = await fetchAutenticado(`${API_URL}/auth/me`)
   if (!res.ok) return null
 
-  const datos: RespuestaUsuario = await res.json()
-  return {
-    usuarioId: datos.usuario_id,
-    nombre: datos.nombre,
-    nivel: datos.nivel,
-    nivelConfirmado: datos.nivel_confirmado,
-  }
+  return aUsuarioDesde(await res.json())
+}
+
+// Actualiza nombre y/o correo del usuario (PATCH /auth/perfil). Devuelve el
+// usuario ya actualizado para refrescar la UI.
+export async function actualizarPerfil(datos: { nombre?: string; email?: string }): Promise<Usuario> {
+  const res = await fetchAutenticado(`${API_URL}/auth/perfil`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(datos),
+  })
+  if (!res.ok) throw new Error(await mensajeDeError(res))
+  return aUsuarioDesde(await res.json())
+}
+
+// Cambia la contraseña (PATCH /auth/contrasena). El backend verifica la actual.
+export async function cambiarContrasena(contrasenaActual: string, contrasenaNueva: string): Promise<void> {
+  const res = await fetchAutenticado(`${API_URL}/auth/contrasena`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contrasena_actual: contrasenaActual, contrasena_nueva: contrasenaNueva }),
+  })
+  if (!res.ok) throw new Error(await mensajeDeError(res))
 }

@@ -50,6 +50,7 @@ export function normalizarTipo(tipo: string): ComponentePlano['kind'] {
   if (t.includes('7 seg') || t.includes('siete seg') || t.includes('seven') || t.includes('segmento') || t.includes('display')) return 'sevenseg'
   if (t.includes('rele') || t.includes('relé') || t.includes('relay')) return 'relay'
   if (t.includes('buzzer') || t.includes('zumbador') || t.includes('piezo') || t.includes('bocina') || t.includes('altavoz') || t.includes('speaker') || t.includes('parlante')) return 'buzzer'
+  if (t.includes('voltimetro') || t.includes('voltímetro') || t.includes('voltmeter') || t.includes('multimetro') || t.includes('multímetro')) return 'voltmeter'
   if (t.includes('motor')) return 'motor'
   if (t.includes('integrado') || t.includes('chip') || /\bic\b/.test(t) || /\b555\b/.test(t) || t.includes('amp op') || t.includes('opamp')) return 'ic'
   if (t.includes('pulsador') || t.includes('push') || t.includes('boton')) return 'pushbutton'

@@ -44,6 +44,9 @@ class EstadoGlobal(TypedDict):
     mime_type: str
     proveedor: str
     modo_interaccion: ModoInteraccion
+    # basico | intermedio | experto — controla CUÁNTO explica la IA (§8: nivel
+    # ≠ tipo de interacción). Ver agents/verbosidad.py.
+    nivel: str
 
     # Historial de chat
     historial_chat: list[MensajeChat]

@@ -24,9 +24,11 @@ export async function enviarMensajeChat(params: {
   proveedor: string
   nivel: string
   instrucciones: Instruccion[]
+  // Si viene, el backend persiste el par usuario/asistente en esa sesión (#73).
+  sesionId?: string
   onEvento: (evento: EventoChat) => void
 }): Promise<void> {
-  const { netlist, historial, proveedor, nivel, instrucciones, onEvento } = params
+  const { netlist, historial, proveedor, nivel, instrucciones, sesionId, onEvento } = params
 
   const form = new FormData()
   form.append('netlist', JSON.stringify(netlist))
@@ -34,6 +36,7 @@ export async function enviarMensajeChat(params: {
   form.append('proveedor', proveedor)
   form.append('nivel', nivel)
   form.append('instrucciones', JSON.stringify(instrucciones))
+  if (sesionId) form.append('sesion_id', sesionId)
 
   const res = await fetchAutenticado(`${API_URL}/chat`, { method: 'POST', body: form })
 

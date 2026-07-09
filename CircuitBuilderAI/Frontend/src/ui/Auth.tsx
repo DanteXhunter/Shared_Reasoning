@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Eye, EyeOff } from 'lucide-react'
 import TemaProvider from './theme'
 import { LogoWordmark } from './Logo'
 import { registrar, login, type Usuario } from '../api/auth'
@@ -11,6 +12,7 @@ function Auth({ onEntrar }: Props) {
   const [nombre, setNombre] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [verPassword, setVerPassword] = useState(false)
   const [error, setError] = useState('')
   const [cargando, setCargando] = useState(false)
 
@@ -103,13 +105,24 @@ function Auth({ onEntrar }: Props) {
             </div>
             <div>
               <label className="block text-sm mb-1.5" style={{ color: 'var(--ink-soft)' }}>Contraseña</label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className={inputClass}
-                style={{ background: 'var(--bg1)', color: 'var(--ink)' }}
-              />
+              <div className="relative">
+                <input
+                  type={verPassword ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className={`${inputClass} pr-11`}
+                  style={{ background: 'var(--bg1)', color: 'var(--ink)' }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setVerPassword((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 grid place-items-center w-6 h-6 hover:opacity-70 transition"
+                  style={{ color: 'var(--ink-soft)' }}
+                  title={verPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                >
+                  {verPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
               {tab === 'registro' && (
                 <p className="text-xs mt-1.5" style={{ color: 'var(--ink-soft)' }}>
                   Mínimo 12 caracteres, con mayúscula, minúscula y número.
