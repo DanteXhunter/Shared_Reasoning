@@ -34,6 +34,10 @@ class Conexion(BaseModel):
 
 
 class Netlist(BaseModel):
+    # Nombre corto y descriptivo del circuito, generado por la IA a partir de lo
+    # que hace el esquemático (ej. "Divisor de voltaje con LED"). Se usa como
+    # título del chat. Opcional para no romper netlists previos.
+    nombre: Optional[str] = None
     componentes: list[Componente]
     conexiones: list[Conexion]
 

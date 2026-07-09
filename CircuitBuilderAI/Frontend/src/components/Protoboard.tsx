@@ -24,6 +24,7 @@ import Switch from '../circuit/components/Switch'
 import Bulb from '../circuit/components/Bulb'
 import Photoresistor from '../circuit/components/Photoresistor'
 import Buzzer from '../circuit/components/Buzzer'
+import Voltmeter from '../circuit/components/Voltmeter'
 import VoltageRegulator from '../circuit/components/VoltageRegulator'
 import Crystal from '../circuit/components/Crystal'
 import SevenSegment from '../circuit/components/SevenSegment'
@@ -148,6 +149,7 @@ const CATALOGO = {
   bulb: Bulb,
   photoresistor: Photoresistor,
   buzzer: Buzzer,
+  voltmeter: Voltmeter,
   crystal: Crystal,
   relay: Relay,
   motor: Motor,

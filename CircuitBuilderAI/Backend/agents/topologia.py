@@ -1,21 +1,19 @@
 """
-Capa DETERMINÍSTICA de topología eléctrica (sin LLM).
+Capa de FÍSICA del circuito (sin LLM) — la parte de la topología que NO es
+negociable, no la de "dónde queda mejor cada cosa".
 
-Traduce un netlist (componentes + conexiones par-a-par) a instrucciones de
-armado en protoboard, agrupando pines en NETS (nodos eléctricos) y colocando
-cada net en un STRIP físico (una fila, columnas a-e conectadas entre sí).
+Este módulo solo responde una pregunta: "¿qué pines DEBEN quedar conectados
+entre sí?" — agrupa los pines de un netlist en NETS (nodos eléctricos) vía
+union-find, con resolución TOLERANTE de nombres de pin (pin1 ↔ terminal_a ↔
+anodo ↔ 1) y detectando la fuente para marcar cuáles nets son + / −.
 
-Principios (robustez que pidió el proyecto):
-  1. Nada se descarta en silencio. Todo lo dudoso queda en `avisos`.
-  2. La FUENTE define los rieles: el net del pin + va al riel +, el del − al −.
-     Sus conexiones nunca desaparecen.
-  3. Resolución TOLERANTE de nombres de pin (pin1 ↔ terminal_a ↔ anodo ↔ 1).
-  4. Un net = un strip = todos sus pines en la misma fila (sin cables internos);
-     los cables solo conectan strips a los rieles de poder.
-
-Nomenclatura de coordenadas: la que espera el frontend (coordPlanner):
-  - `fila`   = número de columna física del protoboard (1..MAX_FILA).
-  - `columna`= letra del strip ('a'..'e' izq, 'f'..'j' der) o riel ('+' / '-').
+El ARMADO (en qué fila/columna va cada componente, qué cables se usan) lo
+propone la IA (ver planner_agent.py); agents/validador.py usa construir_nets()
+de aquí como la "verdad eléctrica" contra la cual comparar esa propuesta.
+Esta separación es intencional: la física de una protoboard (qué huecos
+están conectados) es una regla fija, pero CÓMO se arma un circuito admite
+muchas soluciones válidas — eso debe decidirlo la IA (y negociarse con el
+usuario), no quedar fijo en código.
 """
 from __future__ import annotations
 import re
@@ -178,110 +176,3 @@ def construir_nets(netlist: dict) -> tuple[list[dict], list[str]]:
             if cid not in ids_fuente:
                 avisos.append(f"Pin flotante: {cid}.{pin} no conecta con nada.")
     return nets, avisos
-
-
-def _fuente_pines_a_riel(componentes: list[dict], nets: list[dict]) -> dict:
-    """Mapa (comp_id, pin) → '+' / '-' para los pines de las fuentes."""
-    fuente_map = {}
-    for c in componentes:
-        if es_fuente(c):
-            for p in c.get("pines", []):
-                fuente_map[(c["id"], p.get("nombre", ""))] = "+" if es_pin_positivo(p) else "-"
-    return fuente_map
-
-
-def generar_instrucciones(netlist: dict) -> tuple[list[dict], list[str]]:
-    """
-    Convierte un netlist en instrucciones de armado con coordenadas físicas.
-    Determinístico y tolerante. Devuelve (instrucciones, avisos).
-    """
-    componentes = netlist.get("componentes", [])
-    comp_by_id = {c["id"]: c for c in componentes}
-    ids_fuente = {c["id"] for c in componentes if es_fuente(c)}
-
-    nets, avisos = construir_nets(netlist)
-
-    # 1) Asignar un STRIP (fila) a cada net y coordenada a cada pin no-fuente.
-    coord: dict = {}          # (comp_id, pin) → {"fila", "columna"}
-    cables: list[dict] = []
-    fila = 2
-    # Orden estable: poder primero (rieles arriba), luego señal.
-    nets_ordenados = sorted(nets, key=lambda n: {"positivo": 0, "negativo": 1, "senal": 2}[n["tipo"]])
-
-    for net in nets_ordenados:
-        pines_tablero = [(cid, pin) for (cid, pin) in net["pines"] if cid not in ids_fuente]
-        if not pines_tablero:
-            continue
-        if fila > MAX_FILA:
-            avisos.append("El circuito excede las filas disponibles del protoboard; algunos nets se apilaron.")
-            fila = MAX_FILA
-        if len(pines_tablero) > len(COLS_IZQ):
-            avisos.append(f"Un nodo tiene {len(pines_tablero)} pines (>{len(COLS_IZQ)}); se recomienda dividirlo con un puente.")
-        for i, (cid, pin) in enumerate(pines_tablero):
-            columna = COLS_IZQ[i % len(COLS_IZQ)]
-            coord[(cid, pin)] = {"fila": fila, "columna": columna}
-        # Si el net es de poder, un cable del strip al riel correspondiente.
-        if net["tipo"] in ("positivo", "negativo"):
-            riel = "+" if net["tipo"] == "positivo" else "-"
-            color = "rojo" if net["tipo"] == "positivo" else "negro"
-            col_ancla = COLS_IZQ[min(len(pines_tablero), len(COLS_IZQ) - 1)]
-            cables.append({
-                "color": color,
-                "desde": {"fila": fila, "columna": col_ancla},
-                "hasta": {"fila": fila, "columna": riel},
-            })
-        fila += PASO_FILA
-
-    # 2) Instrucciones: primero la fuente (siempre visible), luego componentes, luego cables.
-    instrucciones: list[dict] = []
-    n = 1
-
-    fuente_map = _fuente_pines_a_riel(componentes, nets)
-    for c in componentes:
-        if not es_fuente(c):
-            continue
-        pines_fuente = [
-            {"nombre": p.get("nombre", ""), "fila": 1, "columna": fuente_map.get((c["id"], p.get("nombre", "")), "+")}
-            for p in c.get("pines", [])
-        ]
-        instrucciones.append({
-            "numero": n, "tipo": "colocar_componente",
-            "componente_id": c["id"], "componente_tipo": c.get("tipo"),
-            "componente_valor": c.get("valor") or None,
-            "descripcion": f"Conecta la fuente {c['id']} ({c.get('valor','')}): el positivo al riel rojo (+) y el negativo al riel azul (−).",
-            "pines": pines_fuente, "cable": None,
-        })
-        n += 1
-
-    for c in componentes:
-        if es_fuente(c):
-            continue
-        pines_coord = []
-        for p in c.get("pines", []):
-            xy = coord.get((c["id"], p.get("nombre", "")))
-            if xy is None:
-                continue
-            pines_coord.append({"nombre": p.get("nombre", ""), "fila": xy["fila"], "columna": xy["columna"]})
-        if len(pines_coord) < 2:
-            avisos.append(f"{c['id']}: no tiene suficientes pines conectados para colocarlo ({len(pines_coord)}).")
-            continue
-        instrucciones.append({
-            "numero": n, "tipo": "colocar_componente",
-            "componente_id": c["id"], "componente_tipo": c.get("tipo"),
-            "componente_valor": c.get("valor") or None,
-            "descripcion": f"Coloca {c['id']} ({c.get('valor','')}) en el protoboard.",
-            "pines": pines_coord, "cable": None,
-        })
-        n += 1
-
-    for cab in cables:
-        destino = "positivo (+)" if cab["color"] == "rojo" else "negativo (−)"
-        instrucciones.append({
-            "numero": n, "tipo": "conectar_cable",
-            "componente_id": None, "componente_tipo": None, "componente_valor": None,
-            "descripcion": f"Cable {cab['color']} de la fila {cab['desde']['fila']} al riel {destino}.",
-            "pines": None, "cable": cab,
-        })
-        n += 1
-
-    return instrucciones, avisos

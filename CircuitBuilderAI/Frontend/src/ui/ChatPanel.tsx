@@ -10,6 +10,8 @@ export type Mensaje = { de: 'ai' | 'tu'; texto: string }
 type Props = {
   mensajes: Mensaje[]
   onMensajes: (m: Mensaje[]) => void
+  // id de la sesión en la BD: si está presente, el backend persiste el chat (#73).
+  sesionId?: string
   netlist: Netlist | null
   instrucciones: Instruccion[]
   proveedor: string
@@ -17,10 +19,14 @@ type Props = {
   onInstruccionesActualizadas: (instrucciones: Instruccion[]) => void
 }
 
-function ChatPanel({ mensajes, onMensajes, netlist, instrucciones, proveedor, nivel, onInstruccionesActualizadas }: Props) {
+function ChatPanel({ mensajes, onMensajes, sesionId, netlist, instrucciones, proveedor, nivel, onInstruccionesActualizadas }: Props) {
   const [texto, setTexto] = useState('')
   const [cargando, setCargando] = useState(false)
-  const [historial, setHistorial] = useState<MensajeHistorial[]>([])
+  // Se siembra con los mensajes ya cargados para que el LLM tenga el contexto
+  // previo de la conversación (bienvenida o historial restaurado de la BD).
+  const [historial, setHistorial] = useState<MensajeHistorial[]>(() =>
+    mensajes.map((m) => ({ rol: m.de === 'tu' ? 'user' : 'assistant', contenido: m.texto })),
+  )
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -45,6 +51,7 @@ function ChatPanel({ mensajes, onMensajes, netlist, instrucciones, proveedor, ni
       proveedor,
       nivel,
       instrucciones,
+      sesionId,
       onEvento: (evento) => {
         if (evento.tipo === 'estado') return
 

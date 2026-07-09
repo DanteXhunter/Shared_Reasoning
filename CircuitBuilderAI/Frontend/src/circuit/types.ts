@@ -17,6 +17,8 @@ export type Componente = {
 export type Conexion = { de: string; a: string; descripcion?: string | null }
 
 export type Netlist = {
+  // Título corto del circuito generado por la IA (ej. "Divisor de voltaje con LED").
+  nombre?: string
   componentes: Componente[]
   conexiones: Conexion[]
 }
@@ -45,6 +47,7 @@ export type ComponentePlano = {
     | 'inductor' | 'fuse' | 'potentiometer' | 'pushbutton' | 'ic'
     | 'source' | 'switch' | 'bulb'
     | 'photoresistor' | 'buzzer' | 'regulator' | 'crystal' | 'sevenseg' | 'relay' | 'motor'
+    | 'voltmeter'
     | 'generic'
   x1: number
   y1: number

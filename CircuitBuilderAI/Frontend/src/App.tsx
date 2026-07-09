@@ -25,11 +25,14 @@ function App() {
   const [paso, setPaso] = useState<Paso>('intro')
   const [nivel, setNivel] = useState<Nivel>('intermedio')
   const [sesion, setSesion] = useState<Sesion | null>(null)
+  // Usuario autenticado (nombre/correo) para el panel de cuenta del sidebar.
+  const [usuario, setUsuario] = useState<Usuario | null>(null)
   // Mientras se confirma si el token guardado sigue siendo válido, no se
   // muestra nada — evita el parpadeo de "intro" antes de decidir a dónde ir.
   const [verificandoSesion, setVerificandoSesion] = useState(true)
 
   function alAutenticar(usuario: Usuario) {
+    setUsuario(usuario)
     setNivel(usuario.nivel)
     // La encuesta se muestra siempre que el nivel no esté confirmado todavía
     // (primera vez tras el registro, o si se quedó a medias); una vez
@@ -55,6 +58,7 @@ function App() {
   function cerrarSesion() {
     borrarToken()
     setSesion(null)
+    setUsuario(null)
     setNivel('intermedio')
     setPaso('auth')
   }
@@ -74,7 +78,7 @@ function App() {
 
   if (modoDev) return <DevApp onVolver={() => setModoDev(false)} />
 
-  if (sesion) return <VistaPrincipal key={sesion.nombre} sesion={sesion} onNuevo={() => { setSesion(null); setPaso('bienvenida') }} onDev={() => setModoDev(true)} onCargarSesion={setSesion} onCerrarSesion={cerrarSesion} />
+  if (sesion) return <VistaPrincipal key={sesion.id ?? sesion.nombre} sesion={sesion} usuario={usuario} onNuevo={() => { setSesion(null); setPaso('bienvenida') }} onCargarSesion={setSesion} onCerrarSesion={cerrarSesion} />
 
   switch (paso) {
     case 'intro':
@@ -84,7 +88,7 @@ function App() {
     case 'encuesta':
       return <EncuestaNivel onElegir={alElegirNivel} />
     case 'bienvenida':
-      return <Bienvenida nivel={nivel} onListo={setSesion} />
+      return <Bienvenida nivel={nivel} onListo={setSesion} usuario={usuario} onActualizarUsuario={setUsuario} onCerrarSesion={cerrarSesion} />
   }
 }
 
