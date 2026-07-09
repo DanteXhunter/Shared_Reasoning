@@ -32,6 +32,8 @@ class Sesion(Base):
         nullable=False,
         index=True,
     )
+    # Nombre legible del circuito, para listar el historial de sesiones (#73/#88).
+    nombre = Column(String(200), nullable=False, default="Circuito sin nombre")
     netlist = Column(JSONB)
     instrucciones = Column(JSONB)
     historial_chat = Column(JSONB)
