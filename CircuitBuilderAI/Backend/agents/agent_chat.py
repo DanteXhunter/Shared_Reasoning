@@ -1,6 +1,7 @@
 import time
 import json
 from agents.estado import EstadoGlobal, MensajeChat
+from agents.verbosidad import reglas_nivel
 from providers.openai_provider import OpenAIProvider
 
 
@@ -60,10 +61,11 @@ async def ejecutar_chat_agent(estado: EstadoGlobal) -> dict:
         }
 
     contexto_circuito = _construir_contexto_circuito(estado)
+    reglas = reglas_nivel(estado.get("nivel", "intermedio"))
 
     system_message = {
         "role": "system",
-        "content": f"{SYSTEM_PROMPT}\n\n{contexto_circuito}"
+        "content": f"{SYSTEM_PROMPT}\n\nNIVEL DEL USUARIO (ajusta cuánto explicas):\n{reglas}\n\n{contexto_circuito}"
     }
 
     mensajes_para_llm = [system_message]

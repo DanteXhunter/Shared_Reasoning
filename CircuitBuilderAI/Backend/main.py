@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from agents.extractor_agent import ejecutar_extractor
 from agents.planner_agent import ejecutar_planner
 from agents.chat_agent_v2 import ejecutar_chat_agent_v2
+from agents.verbosidad import redactar_plan, normalizar_nivel
 from agents.estado import ModoInteraccion, MensajeChat
 from db.database import get_db
 from db.models import Usuario, Sesion, ChatMensaje
@@ -347,20 +348,17 @@ async def analizar_esquematico(
 @app.post("/planificar")
 async def planificar_circuito(
     proveedor: str = Form(...),
-    modo: str = Form(...),
     netlist: str = Form(...),
+    nivel: str = Form(default="intermedio"),
+    # 'modo' (tipo de interacción) se acepta por compatibilidad pero ya no rige
+    # la geometría (la produce la capa determinística); la verbosidad usa 'nivel'.
+    modo: str = Form(default="UNDER"),
     usuario: Usuario = Depends(obtener_usuario_actual),
 ):
     if proveedor not in PROVEEDORES_VALIDOS:
         raise HTTPException(
             status_code=400,
             detail=f"Proveedor '{proveedor}' no válido. Valores válidos: {PROVEEDORES_VALIDOS}"
-        )
-
-    if modo not in [m.value for m in ModoInteraccion]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Modo '{modo}' no válido. Valores válidos: {[m.value for m in ModoInteraccion]}"
         )
 
     try:
@@ -381,7 +379,7 @@ async def planificar_circuito(
         "imagen_base64": "",
         "mime_type": "",
         "proveedor": proveedor,
-        "modo_interaccion": ModoInteraccion(modo),
+        "modo_interaccion": ModoInteraccion(modo) if modo in [m.value for m in ModoInteraccion] else ModoInteraccion.UNDER,
         "historial_chat": [],
         "extractor_intento": 0,
         "extractor_errores": [],
@@ -393,6 +391,7 @@ async def planificar_circuito(
         "extractor_tiempo": 0.0,
     }
 
+    # 1) Geometría determinística (correcta por construcción, 0 tokens).
     resultado = await ejecutar_planner(estado_extractor)
 
     if resultado.get("error"):
@@ -410,6 +409,18 @@ async def planificar_circuito(
     metricas.registrar(tokens_entrada, tokens_salida, proveedor)
     registrar_tokens_usuario(usuario, proveedor, tokens_entrada + tokens_salida)
 
+    # 2) Redacción por nivel (solo el texto; si falla, quedan las básicas).
+    instrucciones, uso_redaccion = await redactar_plan(
+        resultado["instrucciones"], normalizar_nivel(nivel), netlist_dict, proveedor
+    )
+    resultado["instrucciones"] = instrucciones
+    resultado["uso_redaccion"] = uso_redaccion
+    metricas.registrar(uso_redaccion.get("tokens_entrada", 0), uso_redaccion.get("tokens_salida", 0), "openai")
+    registrar_tokens_usuario(
+        usuario, "openai",
+        uso_redaccion.get("tokens_entrada", 0) + uso_redaccion.get("tokens_salida", 0),
+    )
+
     resultado["metricas"] = metricas.resumen(proveedor)
 
     return resultado
@@ -419,7 +430,8 @@ async def planificar_circuito(
 async def procesar_esquematico(
     imagen: UploadFile = File(...),
     proveedor: str = Form(...),
-    modo: str = Form(...),
+    nivel: str = Form(default="intermedio"),
+    modo: str = Form(default="UNDER"),
     usuario: Usuario = Depends(obtener_usuario_actual),
 ):
     if proveedor not in PROVEEDORES_VALIDOS:
@@ -428,6 +440,10 @@ async def procesar_esquematico(
             detail=f"Proveedor '{proveedor}' no válido. Valores válidos: {PROVEEDORES_VALIDOS}"
         )
 
+    # Diego quitó esta validación en dev al refactorizar (modo ahora tiene
+    # default seguro), pero más abajo sigue usando ModoInteraccion(modo) sin
+    # resguardo — un valor inválido tronaría con 500. La conservo para que siga
+    # siendo un 400 claro.
     if modo not in [m.value for m in ModoInteraccion]:
         raise HTTPException(
             status_code=400,
@@ -523,13 +539,23 @@ async def procesar_esquematico(
         metricas.registrar(tokens_entrada_plan, tokens_salida_plan, proveedor)
         registrar_tokens_usuario(usuario, proveedor, tokens_entrada_plan + tokens_salida_plan)
 
-        instrucciones = resultado_planner["instrucciones"]
+        yield _evento_sse("estado", {"mensaje": "Redactando las instrucciones para tu nivel..."})
+
+        instrucciones, uso_redaccion = await redactar_plan(
+            resultado_planner["instrucciones"], normalizar_nivel(nivel), netlist, proveedor
+        )
+        metricas.registrar(uso_redaccion.get("tokens_entrada", 0), uso_redaccion.get("tokens_salida", 0), "openai")
+        registrar_tokens_usuario(
+            usuario, "openai",
+            uso_redaccion.get("tokens_entrada", 0) + uso_redaccion.get("tokens_salida", 0),
+        )
 
         yield _evento_sse("completo", {
             "mensaje": f"Listo, {len(instrucciones)} pasos generados",
             "instrucciones": instrucciones,
             "uso_extractor": resultado_extractor["uso"],
             "uso_planner": resultado_planner["uso"],
+            "uso_redaccion": uso_redaccion,
             "metricas": metricas.resumen(proveedor),
         })
 
@@ -658,6 +684,7 @@ async def chat(
         "mime_type": "",
         "proveedor": proveedor,
         "modo_interaccion": modo,
+        "nivel": normalizar_nivel(nivel),
         "historial_chat": historial_list,
         "extractor_intento": 0,
         "extractor_errores": [],
