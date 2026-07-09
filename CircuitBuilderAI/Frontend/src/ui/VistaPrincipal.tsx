@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  FilePlus2, History, PanelLeft, ArrowLeft, ArrowRight,
-  Eye, EyeOff, Code, User, LayoutGrid, ChevronDown, X, Settings, LogOut,
+  Plus, History, PanelLeft, ArrowLeft, ArrowRight,
+  Eye, EyeOff, User, LayoutGrid, ChevronDown, X, Settings, LogOut,
 } from 'lucide-react'
 import Protoboard from '../components/Protoboard'
 import ComponentGallery from '../components/ComponentGallery'
+import JsonView from '../components/JsonView'
 import ChatPanel, { type Mensaje } from './ChatPanel'
 import TemaProvider from './theme'
 import { LogoWordmark } from './Logo'
@@ -13,14 +14,14 @@ import MiniComponente, { MiniCable } from '../components/MiniComponente'
 import { calcularBandas } from '../circuit/resistorColorCode'
 import { boardSize } from '../circuit/grid'
 import type { Sesion } from './tipos'
-import type { Instruccion } from '../circuit/types'
-import { sesionSensorLuz } from './ejemploSensorLuz'
-import { sesionVitrinaComponentes } from './ejemploVitrina'
+import type { Instruccion, Netlist } from '../circuit/types'
+import { listarSesiones, abrirSesion, type SesionResumen } from '../api/sesiones'
+import type { Usuario } from '../api/auth'
 
 type Props = {
   sesion: Sesion
+  usuario: Usuario | null
   onNuevo: () => void
-  onDev: () => void
   // Cambia a otra sesión (ej. abrir un chat del historial).
   onCargarSesion: (s: Sesion) => void
   onCerrarSesion: () => void
@@ -33,13 +34,6 @@ const ANCHO_CHAT_DEFAULT = 320
 const RIEL_W = 56 // w-14
 const PANEL_DERECHO_W = 384 // w-96
 const PROTOBOARD_MIN = 360 // ancho mínimo del área central para que siga siendo legible
-// Historial demo: 'sesion' carga un chat de prueba real; null = cascarón (issue #88).
-const CHATS_PREVIOS: { nombre: string; cargar: (() => Sesion) | null }[] = [
-  { nombre: 'Sensor de luz nocturna', cargar: sesionSensorLuz },
-  { nombre: 'Vitrina de componentes (QA)', cargar: sesionVitrinaComponentes },
-  { nombre: 'Divisor de voltaje', cargar: null },
-  { nombre: 'Semáforo con 555', cargar: null },
-]
 
 // "B3" legible desde la coordenada del planner (fila=número, columna=letra).
 function coordTexto(fila: number, columna: string): string {
@@ -54,11 +48,51 @@ function formatTiempo(segundos: number): string {
   return `${m}:${s}`
 }
 
+// Una sección de la pestaña "Código": título + botón de copiar + JSON resaltado.
+function SeccionCodigo({ titulo, data }: { titulo: string; data: unknown }) {
+  const [copiado, setCopiado] = useState(false)
+
+  function copiar() {
+    navigator.clipboard.writeText(JSON.stringify(data, null, 2)).then(() => {
+      setCopiado(true)
+      setTimeout(() => setCopiado(false), 1500)
+    })
+  }
+
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+      <div className="flex items-center justify-between px-3 py-2" style={{ background: 'var(--bg2)', borderBottom: '1px solid var(--border)' }}>
+        <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--ink-soft)' }}>{titulo}</span>
+        <button
+          onClick={copiar}
+          className="text-xs px-2.5 py-1 rounded-lg transition hover:opacity-80"
+          style={{ background: 'var(--bg1)', color: 'var(--ink)' }}
+        >
+          {copiado ? '✓ Copiado' : 'Copiar JSON'}
+        </button>
+      </div>
+      <JsonView data={data} className="p-3 bg-slate-950/90 text-slate-100 max-h-[70vh]" />
+    </div>
+  )
+}
+
+// Pestaña "Código": el netlist y las instrucciones tal cual los devuelve el
+// backend — sirve para pegarle este JSON a alguien y verificar la topología
+// exacta en vez de leerla a ojo desde el dibujo de la protoboard.
+function PanelCodigo({ netlist, instrucciones }: { netlist: Netlist | null; instrucciones: Instruccion[] }) {
+  return (
+    <div className="absolute inset-0 overflow-y-auto p-5 flex flex-col gap-4">
+      <SeccionCodigo titulo="Netlist" data={netlist ?? { mensaje: 'Sin netlist (sesión de ejemplo o cargada sin análisis).' }} />
+      <SeccionCodigo titulo="Instrucciones" data={instrucciones} />
+    </div>
+  )
+}
+
 // Vista principal "Paralelo" — layout tomado del mockup de diseño 2026-07-06:
 // top nav con tabs, sidebar de chats, protoboard central, panel de detalle a
 // la derecha (paso, instrucción, componente, coordenadas, lista de componentes)
 // y barra de estadísticas abajo.
-function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion, onCerrarSesion }: Props) {
+function VistaPrincipal({ sesion, usuario, onNuevo, onCargarSesion, onCerrarSesion }: Props) {
   const [instrucciones, setInstrucciones] = useState(sesion.instrucciones)
   const total = instrucciones.length
   const [paso, setPaso] = useState(1)
@@ -77,10 +111,26 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion, onCerrarSesion
   const [verBiblioteca, setVerBiblioteca] = useState(false)
   const [mensajes, setMensajes] = useState<Mensaje[]>(() =>
     sesion.mensajes ?? [
-      { de: 'ai', texto: `Listo — preparé ${instrucciones.length} pasos para armar «${sesion.nombre}». Navega con ← → y te muestro cada paso en la protoboard.` },
+      { de: 'ai', texto: `¡Listo! Analicé tu esquemático «${sesion.nombre}» y lo dividí en ${instrucciones.length} pasos para armarlo en la protoboard. Ve avanzando con las flechas ← → y te voy mostrando cada paso. Si tienes alguna pregunta, aquí estoy. 🙂` },
     ],
   )
   const [tiempo, setTiempo] = useState(0)
+  const [historialSesiones, setHistorialSesiones] = useState<SesionResumen[]>([])
+
+  // Historial real de sesiones del usuario (#73). Se recarga al cambiar de
+  // sesión para que una recién creada aparezca en la lista.
+  useEffect(() => {
+    listarSesiones().then(setHistorialSesiones).catch(() => setHistorialSesiones([]))
+  }, [sesion.id])
+
+  // Abre una sesión del historial (trae netlist, instrucciones y chat de la BD).
+  async function abrirDelHistorial(id: string) {
+    try {
+      onCargarSesion(await abrirSesion(id, { proveedor: sesion.proveedor, nivel: sesion.nivel }))
+    } catch {
+      // Si falla la carga, se mantiene la sesión actual sin interrumpir al usuario.
+    }
+  }
 
   const instruccionActiva = instrucciones.find((i) => i.numero === paso)
   const interacciones = mensajes.filter((m) => m.de === 'tu').length
@@ -187,11 +237,23 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion, onCerrarSesion
   const tabClass = (t: typeof tab) =>
     `px-4 py-1.5 rounded-full text-sm font-semibold transition ${t === tab ? '' : 'hover:opacity-80'}`
 
+  // Colorimetría propia por modo cuando está seleccionado — cada uno remite
+  // a lo que representa: Simulación = acento de marca (protoboard viva),
+  // Esquema = azul (convención universal de diagramas eléctricos),
+  // Código = slate oscuro (mismo tono que el panel de JSON de abajo).
+  const COLOR_TAB: Record<typeof tab, { bg: string; fg: string }> = {
+    simulacion: { bg: 'var(--accent)', fg: 'var(--bg2)' },
+    esquema: { bg: '#2563eb', fg: '#ffffff' },
+    codigo: { bg: '#0f172a', fg: '#e2e8f0' },
+  }
+
   return (
     <TemaProvider tema="light" className="h-screen overflow-hidden flex flex-col" style={{ color: 'var(--ink)', background: 'var(--bg2)' }}>
       {/* ============ BARRA SUPERIOR ============ */}
       <header className="h-16 flex items-center gap-4 px-6 shrink-0" style={{ background: 'var(--bg2)', borderBottom: '1px solid var(--border)' }}>
-        <LogoWordmark height={30} />
+        <button onClick={onNuevo} className="hover:opacity-80 transition" title="Volver a bienvenida">
+          <LogoWordmark height={30} />
+        </button>
         <div className="flex-1" />
         <div className="flex items-center gap-1 rounded-full p-1" style={{ background: 'var(--bg1)' }}>
           {(['simulacion', 'esquema', 'codigo'] as const).map((t) => (
@@ -199,24 +261,21 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion, onCerrarSesion
               key={t}
               onClick={() => setTab(t)}
               className={tabClass(t)}
-              style={t === tab ? { background: 'var(--accent)', color: 'var(--bg2)' } : { color: 'var(--ink-soft)' }}
+              style={t === tab ? { background: COLOR_TAB[t].bg, color: COLOR_TAB[t].fg } : { color: 'var(--ink-soft)' }}
             >
               {t === 'simulacion' ? 'Simulación' : t === 'esquema' ? 'Esquema' : 'Código'}
             </button>
           ))}
         </div>
         <div className="flex-1" />
-        <button onClick={onDev} className="grid place-items-center w-9 h-9 rounded-lg hover:bg-black/5 transition" style={{ color: 'var(--ink-soft)' }} title="Modo desarrollo">
-          <Code size={18} />
-        </button>
         <div className="relative">
           <button
             onClick={() => setMenuUsuarioAbierto((a) => !a)}
-            className="grid place-items-center w-10 h-10 rounded-full hover:brightness-105 transition"
+            className="grid place-items-center w-10 h-10 rounded-full hover:brightness-105 transition text-sm font-semibold"
             style={{ background: 'var(--accent)', color: 'var(--bg2)' }}
             title="Cuenta"
           >
-            <User size={20} />
+            {usuario ? usuario.nombre.charAt(0).toUpperCase() : <User size={20} />}
           </button>
 
           {menuUsuarioAbierto && (
@@ -268,7 +327,7 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion, onCerrarSesion
           </button>
           {/* 2º: nuevo archivo/circuito */}
           <button onClick={onNuevo} className="grid place-items-center w-9 h-9 rounded-lg hover:bg-black/5 transition" title="Nuevo circuito">
-            <FilePlus2 size={18} />
+            <Plus size={18} />
           </button>
           {/* 3º: historial de chats */}
           <button
@@ -324,12 +383,12 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion, onCerrarSesion
               >
                 {sesion.nombre}
               </button>
-              {CHATS_PREVIOS.filter((c) => c.nombre !== sesion.nombre).map((c) => (
+              {historialSesiones.filter((c) => c.id !== sesion.id).map((c) => (
                 <button
-                  key={c.nombre}
-                  onClick={c.cargar ? () => onCargarSesion(c.cargar!()) : undefined}
-                  className="w-full text-left text-sm px-3 py-2 rounded-xl truncate transition hover:bg-black/5"
-                  style={{ color: 'var(--ink-soft)', cursor: c.cargar ? 'pointer' : 'default' }}
+                  key={c.id}
+                  onClick={() => abrirDelHistorial(c.id)}
+                  className="w-full text-left text-sm px-3 py-2 rounded-xl truncate transition cursor-pointer hover:[background:color-mix(in_srgb,var(--accent)_15%,transparent)]"
+                  style={{ color: 'var(--ink-soft)' }}
                 >
                   {c.nombre}
                 </button>
@@ -340,6 +399,7 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion, onCerrarSesion
             <ChatPanel
               mensajes={mensajes}
               onMensajes={setMensajes}
+              sesionId={sesion.id}
               netlist={sesion.netlist}
               instrucciones={instrucciones}
               proveedor={sesion.proveedor}
@@ -353,23 +413,37 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion, onCerrarSesion
         </aside>
 
         {/* ============ ÁREA CENTRAL: PROTOBOARD ============ */}
-        <main className="flex-1 flex flex-col min-w-0">
-          <div ref={contRef} className="flex-1 m-5 rounded-2xl grid place-items-center relative overflow-hidden" style={{ background: 'var(--bg1)' }}>
+        <main className="flex-1 flex flex-col min-w-0 min-h-0">
+          <div
+            ref={contRef}
+            className={`flex-1 min-h-0 m-5 rounded-2xl relative overflow-hidden ${tab === 'codigo' ? '' : 'grid place-items-center'}`}
+            style={{ background: 'var(--bg1)' }}
+          >
             {tab === 'simulacion' ? (
               <Protoboard componentes={componentes} cables={cables} baterias={baterias} escala={escala} />
+            ) : tab === 'codigo' ? (
+              <PanelCodigo netlist={sesion.netlist} instrucciones={instrucciones} />
+            ) : sesion.imagenEsquema ? (
+              <img
+                src={sesion.imagenEsquema}
+                alt={`Esquemático de ${sesion.nombre}`}
+                className="max-h-full max-w-full object-contain p-5"
+              />
             ) : (
               <span className="text-sm" style={{ color: 'var(--ink-soft)' }}>
-                {tab === 'esquema' ? 'Vista de esquemático — próximamente' : 'Vista de código — próximamente'}
+                Vista de esquemático — próximamente
               </span>
             )}
-            <button
-              onClick={() => setRevelado((v) => !v)}
-              className="absolute top-3 right-3 grid place-items-center w-8 h-8 rounded-lg shadow"
-              style={{ background: 'var(--bg2)', border: '1px solid var(--border)' }}
-              title={revelado ? 'Ver circuito completo' : 'Volver al revelado por paso'}
-            >
-              {revelado ? <Eye size={16} /> : <EyeOff size={16} />}
-            </button>
+            {tab === 'simulacion' && (
+              <button
+                onClick={() => setRevelado((v) => !v)}
+                className="absolute top-3 right-3 grid place-items-center w-8 h-8 rounded-lg shadow"
+                style={{ background: 'var(--bg2)', border: '1px solid var(--border)' }}
+                title={revelado ? 'Ver circuito completo' : 'Volver al revelado por paso'}
+              >
+                {revelado ? <Eye size={16} /> : <EyeOff size={16} />}
+              </button>
+            )}
           </div>
 
           {/* Barra de estadísticas */}

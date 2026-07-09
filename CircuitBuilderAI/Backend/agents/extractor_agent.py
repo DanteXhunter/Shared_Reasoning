@@ -1,8 +1,10 @@
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
+from openai import RateLimitError, APIError
 from schemas.netlist import Netlist
 from pydantic import ValidationError
 from typing import TypedDict, Optional
+from agents.topologia import construir_nets
 import base64
 import json
 import os
@@ -18,6 +20,7 @@ Responde ÚNICAMENTE con un JSON válido, sin texto adicional, sin bloques de c�
 
 Estructura requerida:
 {
+    "nombre": "Divisor de voltaje con LED",
     "componentes": [
         {
             "id": "R1",
@@ -32,6 +35,16 @@ Estructura requerida:
                 {"nombre": "pin1", "funcion": "terminal_a"},
                 {"nombre": "pin2", "funcion": "terminal_b"}
             ]
+        },
+        {
+            "id": "LED1",
+            "tipo": "led",
+            "valor": "N/A",
+            "unidad": "N/A",
+            "pines": [
+                {"nombre": "anodo", "funcion": "positivo"},
+                {"nombre": "catodo", "funcion": "negativo"}
+            ]
         }
     ],
     "conexiones": [
@@ -39,30 +52,58 @@ Estructura requerida:
             "de": "R1.pin1",
             "a": "VCC",
             "descripcion": "conexión a alimentación"
+        },
+        {
+            "de": "R1.pin2",
+            "a": "LED1.anodo",
+            "descripcion": "R1 y LED1 en serie"
+        },
+        {
+            "de": "LED1.catodo",
+            "a": "GND",
+            "descripcion": "conexión a tierra"
         }
     ]
 }
 
 Reglas:
+- "nombre": genera un título corto y descriptivo (3 a 6 palabras, en español) de lo que HACE el circuito, no de sus componentes sueltos (ej. "Divisor de voltaje con LED", "Parpadeo de LED con 555", "Sensor de luz con LDR"). Debe servir como título legible del proyecto para una persona. Si no puedes inferir la función, usa el componente principal (ej. "Circuito con transistor NPN"). No uses el nombre del archivo ni comillas dentro del texto.
 - Incluye TODOS los componentes visibles en el esquemático
+- Antes de listar los componentes, ESCANEA el esquemático completo de forma sistemática (de izquierda a derecha, de arriba a abajo) y CUENTA cuántos símbolos hay de cada tipo (cuántas resistencias, cuántos LEDs, etc.) antes de escribir el JSON. Es común que un esquemático tenga MÁS DE UN componente del mismo tipo (ej. 2 resistencias, R1 y R2) — no asumas que hay solo uno porque el primero que identificaste ya "cumple" la función. Dos símbolos que se ven parecidos o están cerca uno del otro son casi siempre DOS componentes distintos, no uno solo dibujado dos veces.
 - SIEMPRE incluye la fuente de alimentación como componente (batería, fuente DC, regulador de voltaje, etc.) aunque esté representada solo como un símbolo. Usa id "BAT1", "V1" o similar según corresponda.
 - En "conexiones" SIEMPRE incluye las conexiones al polo positivo (VCC) y al polo negativo/tierra (GND) de cada componente que las tenga. Sin estas conexiones el circuito no funciona.
+- En "conexiones" describe también las conexiones DIRECTAS entre dos componentes distintos (ej. "de": "R1.pin2", "a": "LED1.anodo") cuando estén en serie o compartan un nodo que no es VCC ni GND — ver el ejemplo de arriba.
 - VCC representa el polo positivo de la fuente. GND representa el polo negativo o tierra.
 - En "propiedades" incluye solo las características que puedas identificar: polaridad, voltaje máximo, corriente, potencia, tolerancia, tipo (NPN/PNP), etc.
 - Si "propiedades" no es visible en el esquemático, omite ese campo en lugar de poner null
 - Los campos "valor" y "unidad" son SIEMPRE obligatorios. Si el valor no es legible en el esquemático (por ejemplo un interruptor, un conector, o una fuente sin etiqueta), usa "valor": "N/A" y "unidad": "N/A".
 - Los pines deben tener nombres específicos según el componente: base/colector/emisor para transistores, anodo/catodo para diodos y LEDs, plus/minus para fuentes, etc.
-- En "conexiones" describe TODAS las conexiones entre pines y hacia nodos de alimentación como VCC y GND
+- Los instrumentos de medición (voltímetro, amperímetro, multímetro — círculo con "V" o "A" adentro) SON componentes: inclúyelos con "tipo": "voltimetro" o "amperimetro", con dos pines (plus/minus), igual que cualquier otro componente de 2 patas.
+- No inventes componentes, pines o conexiones que no puedas identificar razonablemente en la imagen. Si un símbolo es ambiguo o ilegible, usa tu mejor interpretación de ingeniería (nunca lo omitas si claramente hay un componente ahí), pero no agregues componentes adicionales "por si acaso" ni conexiones que no tengan un trazo o indicio visual que las respalde.
+- CATÁLOGO DE REFERENCIA (no es una lista cerrada): estos nombres de "tipo" tienen un dibujo detallado en nuestra biblioteca visual — resistencia, led, diodo, transistor, potenciometro, capacitor, capacitor electrolitico, inductor, fusible, cristal, display 7 segmentos, rele, buzzer, voltimetro, motor, circuito integrado, pulsador, fuente, interruptor, foco, fotorresistor. Si el componente que ves coincide con uno de estos, usa EXACTAMENTE ese nombre para que se dibuje con el mejor detalle posible. Pero si el componente real es otra cosa que no está en esta lista, identifícalo con su nombre técnico correcto de todas formas — NUNCA fuerces ni renombres un componente para que encaje en el catálogo solo porque el catálogo existe. Prioriza siempre representar fielmente lo que ves en el esquemático sobre encajar en la lista; un componente sin dibujo detallado se muestra genérico, pero un componente mal identificado rompe el circuito.
 
 Antes de responder, verifica mentalmente:
 [ ] ¿Incluí la fuente de alimentación como componente?
+[ ] ¿Volví a contar los símbolos del esquemático y el número de componentes en mi JSON coincide? (revisa especialmente si hay 2+ componentes del mismo tipo)
 [ ] ¿Hay al menos una conexión hacia VCC y al menos una hacia GND?
 [ ] ¿Cada componente que necesita corriente tiene sus conexiones de alimentación?
+[ ] ¿Describí las conexiones DIRECTAS entre componentes distintos, no solo las de VCC/GND?
 [ ] ¿Ningún pin visible en el esquemático quedó sin conexión?
-[ ] ¿El JSON es válido y tiene la estructura exacta requerida?
 """
 
 MODELOS_LANGGRAPH = {
+    # Gemini vía su endpoint compatible con OpenAI → mejor visión para leer
+    # esquemáticos (modelo principal del proyecto, gratis 1500/día).
+    "gemini": {
+        "model": "gemini-2.5-flash",
+        "api_key_env": "GEMINI_API_KEY",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+    },
+    "gemini-free": {
+        "model": "gemini-2.5-flash-lite",
+        "api_key_env": "GEMINI_API_KEY",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+    },
     "openai": {
         "model": "gpt-4o-mini",
         "api_key_env": "OPENAI_API_KEY",
@@ -241,12 +282,45 @@ def nodo_validar(estado: EstadoExtractor) -> dict:
             "exito": False,
         }
 
+    errores_topologia = _detectar_pines_propios_en_mismo_nodo(netlist_dict)
+    if errores_topologia:
+        return {
+            "errores": estado["errores"] + ["\n".join(errores_topologia)],
+            "exito": False,
+        }
+
     netlist_dict = _normalizar_poder(netlist_dict)
 
     return {
         "netlist": netlist_dict,
         "exito": True,
     }
+
+
+def _detectar_pines_propios_en_mismo_nodo(netlist: dict) -> list[str]:
+    """
+    Si se fusionan por error dos nodos distintos del esquemático, es frecuente
+    que un mismo componente termine con 2 de sus propios pines en el mismo
+    nodo eléctrico — eso lo cortocircuita a sí mismo (ej. una resistencia con
+    sus 2 patas al mismo punto no hace nada en el circuito). Casi siempre es
+    síntoma de una topología mal leída, no un circuito real, así que se
+    rebota como error para que la IA vuelva a mirar la imagen.
+    """
+    nets, _ = construir_nets(netlist)
+    errores: list[str] = []
+    for net in nets:
+        por_componente: dict[str, list[str]] = {}
+        for comp_id, pin in net["pines"]:
+            por_componente.setdefault(comp_id, []).append(pin)
+        for comp_id, pines in por_componente.items():
+            if len(pines) > 1:
+                errores.append(
+                    f"El componente {comp_id} tiene sus pines {', '.join(pines)} unidos al mismo "
+                    f"nodo eléctrico — eso lo cortocircuita a sí mismo (no hace nada en el circuito). "
+                    f"Vuelve a revisar la imagen: probablemente confundiste dos nodos distintos del "
+                    f"esquemático y los uniste por error en las conexiones."
+                )
+    return errores
 
 
 def decidir_siguiente(estado: EstadoExtractor) -> str:
@@ -306,9 +380,45 @@ async def ejecutar_extractor(imagen_bytes: bytes, mime_type: str, proveedor: str
     }
 
     grafo = crear_grafo_extractor()
-    estado_final = await grafo.ainvoke(estado_inicial)
-
     modelo_activo = config["model"]
+
+    try:
+        estado_final = await grafo.ainvoke(estado_inicial)
+    except RateLimitError:
+        # Cuota agotada (ej. límite diario del free tier de Gemini). Sin este
+        # try/except la excepción escapaba sin manejar y FastAPI la convertía
+        # en un 500 sin headers de CORS — el navegador lo reportaba como un
+        # bloqueo de CORS, ocultando la causa real.
+        tiempo_total = round(time.time() - inicio, 2)
+        return {
+            "error": True,
+            "mensaje": f"Se agotó la cuota gratuita del proveedor '{proveedor}'. Cambia de modelo en el selector (ej. 'openai') o espera a que se reinicie el límite diario.",
+            "errores": [f"Rate limit excedido para '{modelo_activo}'."],
+            "uso": {
+                "tokens_entrada": 0,
+                "tokens_salida": 0,
+                "tokens_total": 0,
+                "intentos": 0,
+                "modelo_activo": modelo_activo,
+                "tiempo_segundos": tiempo_total,
+            },
+        }
+    except APIError as e:
+        tiempo_total = round(time.time() - inicio, 2)
+        return {
+            "error": True,
+            "mensaje": f"El proveedor '{proveedor}' no respondió correctamente. Intenta de nuevo o cambia de modelo.",
+            "errores": [str(e)],
+            "uso": {
+                "tokens_entrada": 0,
+                "tokens_salida": 0,
+                "tokens_total": 0,
+                "intentos": 0,
+                "modelo_activo": modelo_activo,
+                "tiempo_segundos": tiempo_total,
+            },
+        }
+
     tiempo_total = round(time.time() - inicio, 2)
 
     if estado_final["exito"]:
