@@ -486,7 +486,7 @@ function VistaPrincipal({ sesion, onNuevo, onDev, onCargarSesion }: Props) {
                 <X size={16} />
               </button>
             </div>
-            <ComponentGallery />
+            <ComponentGallery componentesSesion={sesion.netlist?.componentes ?? []} />
           </div>
         </div>
       )}
