@@ -2,6 +2,9 @@ import { useState } from 'react'
 import { Stage, Layer, Rect } from 'react-konva'
 import type { ReactNode } from 'react'
 
+import MiniComponente from './MiniComponente'
+import { normalizarTipo } from '../circuit/layout'
+import type { Componente } from '../circuit/types'
 import Resistor from '../circuit/components/Resistor'
 import { calcularBandas, parseOhmios } from '../circuit/resistorColorCode'
 import LED from '../circuit/components/LED'
@@ -45,6 +48,17 @@ const tresPatas = { x1: 65, y1: 82, x2: 145, y2: 82, x3: 105, y3: 82 }
 
 type ItemProps = { nombre: string; sub?: string; children: ReactNode }
 
+// Hueco reservado para la descripción "de qué hace" cada componente.
+// Cascarón por ahora: el texto lo iremos poniendo después (dictado del usuario).
+function HuecoDescripcion() {
+  return (
+    <div
+      className="mt-2 w-full rounded-md"
+      style={{ minHeight: 30, border: '1px dashed var(--border)' }}
+    />
+  )
+}
+
 function Celda({ nombre, sub, children }: ItemProps) {
   return (
     <div
@@ -60,6 +74,36 @@ function Celda({ nombre, sub, children }: ItemProps) {
       </Stage>
       <p className="mt-1 text-sm font-medium" style={{ color: 'var(--ink)' }}>{nombre}</p>
       {sub && <p className="text-[10px]" style={{ color: 'var(--ink-soft)' }}>{sub}</p>}
+      <HuecoDescripcion />
+    </div>
+  )
+}
+
+// Una tarjeta del desglose "paso a paso" de los componentes de ESTA sesión.
+// Dibujo real (mismo del catálogo) + identidad del componente + hueco de descripción.
+function TarjetaSesion({ numero, componente }: { numero: number; componente: Componente }) {
+  const kind = normalizarTipo(componente.tipo)
+  return (
+    <div
+      className="rounded-xl p-3 flex items-start gap-3 shadow-sm"
+      style={{ background: 'var(--bg2)', border: '1px solid var(--border)' }}
+    >
+      <span
+        className="shrink-0 grid place-items-center w-6 h-6 rounded-full text-xs font-semibold"
+        style={{ background: 'var(--accent)', color: 'var(--bg2)' }}
+      >
+        {numero}
+      </span>
+      <div className="shrink-0 rounded-lg p-1" style={{ background: 'var(--bg1)' }}>
+        <MiniComponente kind={kind} valor={componente.valor} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold truncate" style={{ color: 'var(--ink)' }}>
+          {componente.id}{componente.valor ? ` · ${componente.valor}${componente.unidad ? ` ${componente.unidad}` : ''}` : ''}
+        </p>
+        <p className="text-[11px] capitalize" style={{ color: 'var(--ink-soft)' }}>{componente.tipo}</p>
+        <HuecoDescripcion />
+      </div>
     </div>
   )
 }
@@ -160,13 +204,39 @@ function ResistorPlayground() {
   )
 }
 
-function ComponentGallery() {
+function ComponentGallery({ componentesSesion = [] }: { componentesSesion?: Componente[] }) {
   return (
     <div>
-      <ResistorPlayground />
+      {/* ───────────────── SECCIÓN A — Componentes de ESTA sesión ───────────────── */}
+      <section className="mb-8">
+        <p className="text-xs uppercase tracking-widest mb-3" style={{ color: 'var(--ink-soft)' }}>
+          Componentes de esta sesión
+        </p>
+        {componentesSesion.length > 0 ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {componentesSesion.map((c, i) => (
+              <TarjetaSesion key={`${c.id}-${i}`} numero={i + 1} componente={c} />
+            ))}
+          </div>
+        ) : (
+          <div
+            className="rounded-xl p-6 text-center text-xs"
+            style={{ background: 'var(--bg1)', border: '1px dashed var(--border)', color: 'var(--ink-soft)' }}
+          >
+            Aún no hay componentes en esta sesión.
+          </div>
+        )}
+      </section>
 
-      <p className="text-xs mb-2" style={{ color: 'var(--ink-soft)' }}>Resto del catálogo:</p>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+      {/* ───────────────── SECCIÓN B — Biblioteca completa ───────────────── */}
+      <section>
+        <p className="text-xs uppercase tracking-widest mb-3" style={{ color: 'var(--ink-soft)' }}>
+          Biblioteca completa
+        </p>
+
+        <ResistorPlayground />
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
       <Celda nombre="LED" sub="diodo emisor"><LED {...dosPatas} /></Celda>
       <Celda nombre="Diodo" sub="rectificador"><Diode {...dosPatas} /></Celda>
       <Celda nombre="Transistor" sub="BJT · TO-92"><Transistor {...tresPatas} /></Celda>
@@ -196,7 +266,8 @@ function ComponentGallery() {
       <Celda nombre="Motor DC" sub="hobby"><Motor {...dosPatas} /></Celda>
 
       <Celda nombre="Genérico" sub="fallback"><Generic {...dosPatas} /></Celda>
-      </div>
+        </div>
+      </section>
     </div>
   )
 }
