@@ -7,7 +7,8 @@ import { type Usuario } from '../api/auth'
 import PanelUsuario from './PanelUsuario'
 import TemaProvider, { type Tema } from './theme'
 import { LogoWordmark } from './Logo'
-import { PROVEEDORES, INTENCIONES, type Intencion, type Sesion, type Nivel } from './tipos'
+import SelectorModelo from './SelectorModelo'
+import { INTENCIONES, type Intencion, type Sesion, type Nivel } from './tipos'
 
 type Props = {
   onListo: (sesion: Sesion) => void
@@ -42,7 +43,8 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
   const [imagen, setImagen] = useState<File | null>(null)
   const [preview, setPreview] = useState<string | null>(null)
   const [prompt, setPrompt] = useState('')
-  const [proveedor, setProveedor] = useState(PROVEEDORES[0])
+  // Vacío hasta que SelectorModelo cargue el catálogo y aplique el default.
+  const [proveedor, setProveedor] = useState('')
   const [fase, setFase] = useState<'form' | 'intencion' | 'cargando'>('form')
   const [mensajeCarga, setMensajeCarga] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -286,20 +288,13 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
                 style={{ background: 'var(--bg1)', border: '1px solid var(--border)', color: 'var(--ink)' }}
               />
 
-              {/* Modelo (cascarón: el selector existe, el LLM de chat aún no) */}
+              {/* Modelo: catálogo agrupado (pago / free / locales) desde el backend */}
               <div className="flex items-center gap-3">
                 <label className="text-xs uppercase tracking-widest" style={{ color: 'var(--ink-soft)' }}>Modelo</label>
-                <select
-                  value={proveedor}
-                  onChange={(e) => setProveedor(e.target.value)}
-                  className="rounded-lg px-3 py-1.5 text-sm outline-none"
-                  style={{ background: 'var(--bg1)', border: '1px solid var(--border)', color: 'var(--ink)' }}
-                >
-                  {PROVEEDORES.map((p) => <option key={p} value={p} style={{ background: 'var(--bg2)' }}>{p}</option>)}
-                </select>
+                <SelectorModelo value={proveedor} onChange={setProveedor} />
                 <button
                   onClick={continuar}
-                  disabled={!imagen}
+                  disabled={!imagen || !proveedor}
                   className="ml-auto px-5 py-2 rounded-xl accent-bg text-white text-sm font-medium shadow-lg hover:brightness-110 disabled:opacity-40 transition"
                 >
                   Comenzar →
