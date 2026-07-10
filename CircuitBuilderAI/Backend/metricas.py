@@ -1,8 +1,10 @@
 from datetime import date
 
 LIMITES = {
-    "gemini": {"tipo": "diario", "peticiones_dia": 1500, "peso_max_mb": 20},
-    "gemini-free": {"tipo": "diario", "peticiones_dia": 1500, "peso_max_mb": 20},
+    # gemini-2.5-flash no tiene capa gratuita: exige créditos prepago en la
+    # cuenta. Se factura por saldo, igual que OpenAI.
+    "gemini": {"tipo": "saldo", "peso_max_mb": 20, "costo_input_por_millon": 0.30, "costo_output_por_millon": 2.50},
+    "gemini-free": {"tipo": "diario", "peticiones_dia": 1000, "peso_max_mb": 20},
     "nemotron": {"tipo": "diario", "peticiones_dia": 33, "peso_max_mb": 5},
     "llama-vision": {"tipo": "diario", "peticiones_dia": 33, "peso_max_mb": 5},
     "openai": {"tipo": "saldo", "peso_max_mb": 20, "costo_input_por_millon": 0.15, "costo_output_por_millon": 0.60},

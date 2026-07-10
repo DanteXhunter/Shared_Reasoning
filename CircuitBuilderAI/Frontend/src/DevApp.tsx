@@ -6,10 +6,8 @@ import ComponentGallery from './components/ComponentGallery'
 import { analizarEsquematico } from './api/analizar'
 import { planificarCircuito } from './api/planificar'
 import { autoLayout, layoutDesdeInstrucciones, EJEMPLO_DIVISOR, EJEMPLO_LAMPARA, EJEMPLO_PLANNER, EJEMPLO_DIODO_TRANSISTOR } from './circuit/layout'
+import SelectorModelo from './ui/SelectorModelo'
 import type { Netlist, Instruccion } from './circuit/types'
-
-// Proveedores que el agente extractor del backend soporta.
-const PROVEEDORES = ['openai', 'nemotron', 'llama-vision']
 
 // ============================================================
 //  MODO DESARROLLO — interfaz de prueba del pipeline
@@ -18,7 +16,7 @@ const PROVEEDORES = ['openai', 'nemotron', 'llama-vision']
 // ============================================================
 function DevApp({ onVolver }: { onVolver: () => void }) {
   const [imagen, setImagen] = useState<File | null>(null)
-  const [proveedor, setProveedor] = useState('openai')
+  const [proveedor, setProveedor] = useState('')
   const [modo, setModo] = useState('UNDER')
   const [netlist, setNetlist] = useState<Netlist | null>(null)
   const [instrucciones, setInstrucciones] = useState<Instruccion[] | null>(null)
@@ -117,16 +115,14 @@ function DevApp({ onVolver }: { onVolver: () => void }) {
             <input type="file" accept="image/*" className="hidden" onChange={(e) => setImagen(e.target.files?.[0] ?? null)} />
           </label>
 
-          <select value={proveedor} onChange={(e) => setProveedor(e.target.value)} className={selectClass}>
-            {PROVEEDORES.map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
+          <SelectorModelo value={proveedor} onChange={setProveedor} />
           <select value={modo} onChange={(e) => setModo(e.target.value)} className={selectClass} title="Modo de interacción">
             {['UNDER', 'OVER', 'ALONG', 'IN', 'ON'].map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
 
           <button
             onClick={analizar}
-            disabled={!imagen || cargando}
+            disabled={!imagen || !proveedor || cargando}
             className="px-4 py-1.5 rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600 hover:brightness-110 disabled:opacity-40 disabled:hover:brightness-100 transition text-sm font-medium shadow-lg shadow-violet-900/30"
           >
             {cargando ? '⏳ …' : '① Analizar'}

@@ -4,6 +4,7 @@ from agents.estado import EstadoGlobal, MensajeChat
 from agents.agent_chat import ejecutar_chat_agent, SYSTEM_PROMPT, _construir_contexto_circuito
 from agents.planner_agent import ejecutar_planner
 from agents.seguridad import sanitizar_entrada_usuario, delimitar_entrada_usuario
+from providers.catalogo import crear_provider_chat
 from providers.openai_provider import OpenAIProvider
 
 
@@ -58,6 +59,17 @@ Si el mensaje no describe un cambio de conexión eléctrica válido, devuelve el
 Responde ÚNICAMENTE con el JSON del netlist actualizado, con la misma estructura que el netlist original.
 No agregues texto adicional ni bloques de código markdown.
 """
+
+
+def _error_proveedor(proveedor: str, e: Exception) -> dict:
+    """El proveedor no respondió (caído, sin saldo, sin cuota). Se devuelve el
+    mismo shape de error que el resto del agente para que /chat lo emita como
+    evento SSE en vez de romper el stream."""
+    detalle = "Verifica que Ollama esté corriendo." if proveedor == "ollama" else "Intenta de nuevo o cambia de modelo."
+    return {
+        "error": True,
+        "mensaje": f"El proveedor '{proveedor}' no respondió correctamente. {detalle}",
+    }
 
 
 async def _clasificar_intencion(mensaje: str, proveedor: OpenAIProvider) -> str:
@@ -152,10 +164,14 @@ async def ejecutar_chat_agent_v2(estado: EstadoGlobal) -> dict:
     # historial que ve el Chat Agent base) ya trabaja sobre el texto limpio.
     historial[-1]["contenido"] = sanitizar_entrada_usuario(historial[-1]["contenido"])
     ultimo_mensaje = historial[-1]["contenido"]
-    proveedor = OpenAIProvider(variante="openai")
+    proveedor_id = estado.get("proveedor", "openai")
+    proveedor = crear_provider_chat(proveedor_id)
 
     # ── Clasificar intención ──
-    intencion = await _clasificar_intencion(ultimo_mensaje, proveedor)
+    try:
+        intencion = await _clasificar_intencion(ultimo_mensaje, proveedor)
+    except Exception as e:
+        return _error_proveedor(proveedor_id, e)
 
     # ── Responder pregunta ──
     if intencion == "responder":
@@ -185,6 +201,8 @@ async def ejecutar_chat_agent_v2(estado: EstadoGlobal) -> dict:
                 "mensaje": "No pude interpretar el cambio de posición. ¿Puedes indicar el componente y la fila exacta?",
                 "intencion_detectada": intencion,
             }
+        except Exception as e:
+            return {**_error_proveedor(proveedor_id, e), "intencion_detectada": intencion}
 
         if not overrides:
             resultado = await ejecutar_chat_agent(estado)
@@ -252,6 +270,8 @@ async def ejecutar_chat_agent_v2(estado: EstadoGlobal) -> dict:
             "mensaje": "No se pudo interpretar la modificación solicitada. ¿Puedes reformular el cambio?",
             "intencion_detectada": intencion,
         }
+    except Exception as e:
+        return {**_error_proveedor(proveedor_id, e), "intencion_detectada": intencion}
 
     # ── Disparar Planner con netlist modificado ──
     estado_para_planner = {
