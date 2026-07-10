@@ -9,8 +9,8 @@ from fastapi import HTTPException
 load_dotenv()
 
 MODELOS = {
-    "gemini": "models/gemini-2.5-flash",
-    "gemini-free": "models/gemini-2.5-flash-lite",
+    "gemini": "gemini-2.5-flash",
+    "gemini-free": "gemini-2.5-flash-lite",
 }
 
 

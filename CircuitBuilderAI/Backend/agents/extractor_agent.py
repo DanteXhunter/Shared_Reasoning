@@ -1,10 +1,14 @@
 from langgraph.graph import StateGraph, END
-from langchain_openai import ChatOpenAI
 from openai import RateLimitError, APIError
 from schemas.netlist import Netlist
 from pydantic import ValidationError
 from typing import TypedDict, Optional
 from agents.topologia import construir_nets
+from providers.catalogo import (
+    MODELOS_LANGGRAPH,
+    crear_modelo_langgraph as crear_modelo,
+    crear_provider_chat,
+)
 import base64
 import json
 import os
@@ -91,37 +95,6 @@ Antes de responder, verifica mentalmente:
 [ ] ¿Ningún pin visible en el esquemático quedó sin conexión?
 """
 
-MODELOS_LANGGRAPH = {
-    # Gemini vía su endpoint compatible con OpenAI → mejor visión para leer
-    # esquemáticos (modelo principal del proyecto, gratis 1500/día).
-    "gemini": {
-        "model": "gemini-2.5-flash",
-        "api_key_env": "GEMINI_API_KEY",
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-    },
-    "gemini-free": {
-        "model": "gemini-2.5-flash-lite",
-        "api_key_env": "GEMINI_API_KEY",
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-    },
-    "openai": {
-        "model": "gpt-4o-mini",
-        "api_key_env": "OPENAI_API_KEY",
-        "base_url": None,
-    },
-    "nemotron": {
-        "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
-        "api_key_env": "NVIDIA_API_KEY",
-        "base_url": "https://integrate.api.nvidia.com/v1",
-    },
-    "llama-vision": {
-        "model": "meta/llama-3.2-11b-vision-instruct",
-        "api_key_env": "NVIDIA_API_KEY",
-        "base_url": "https://integrate.api.nvidia.com/v1",
-    },
-}
-
-
 class EstadoExtractor(TypedDict):
     imagen_base64: str
     mime_type: str
@@ -133,27 +106,6 @@ class EstadoExtractor(TypedDict):
     exito: bool
     tokens_entrada: int
     tokens_salida: int
-
-
-def crear_modelo(proveedor: str):
-    config = MODELOS_LANGGRAPH.get(proveedor)
-    if not config:
-        raise ValueError(
-            f"Proveedor '{proveedor}' no tiene configuración para LangGraph. "
-            f"Disponibles: {list(MODELOS_LANGGRAPH.keys())}"
-        )
-
-    params = {
-        "model": config["model"],
-        "api_key": os.getenv(config["api_key_env"]),
-        "temperature": 0,
-        "max_retries": 0,
-    }
-
-    if config["base_url"]:
-        params["base_url"] = config["base_url"]
-
-    return ChatOpenAI(**params)
 
 
 def nodo_analizar(estado: EstadoExtractor) -> dict:

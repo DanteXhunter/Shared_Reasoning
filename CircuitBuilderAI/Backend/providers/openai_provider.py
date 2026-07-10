@@ -14,13 +14,23 @@ MODELOS = {
 
 
 class OpenAIProvider(LLMProvider):
-    def __init__(self, variante: str = "openai"):
+    def __init__(
+        self,
+        variante: str = "openai",
+        model: str | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+    ):
+        # base_url permite reutilizar este provider con cualquier endpoint
+        # compatible con /v1/chat/completions (Gemini, NVIDIA NIM, etc.) sin
+        # duplicar la clase — ver CLAUDE.md §7.
         self.client = AsyncOpenAI(
-            api_key=os.getenv("OPENAI_API_KEY"),
+            api_key=api_key or os.getenv("OPENAI_API_KEY"),
+            base_url=base_url,
             timeout=30.0,
             max_retries=0,
         )
-        self.model = MODELOS.get(variante, "gpt-4o-mini")
+        self.model = model or MODELOS.get(variante, "gpt-4o-mini")
         self.tokens_consumidos_sesion = 0
 
     async def analizar_esquematico(self, imagen_bytes: bytes, mime_type: str) -> dict:

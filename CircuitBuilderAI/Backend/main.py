@@ -27,6 +27,11 @@ from auth import (
     obtener_usuario_actual,
 )
 from metricas import Metricas, LIMITES
+from providers.catalogo import (
+    PROVEEDORES_VALIDOS,
+    descripcion_publica,
+    proveedor_por_defecto,
+)
 from rate_limit import (
     verificar_frecuencia,
     verificar_presupuesto_tokens,
@@ -53,7 +58,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-PROVEEDORES_VALIDOS = list(LIMITES.keys())
 TIPOS_IMAGEN_VALIDOS = ["image/jpeg", "image/png", "image/webp", "image/tiff", "image/heic"]
 
 metricas = Metricas()
@@ -80,6 +84,19 @@ async def root():
         "mensaje": "Paralelo backend corriendo",
         "version": "1.0.0",
         "metricas": {proveedor: metricas.resumen(proveedor) for proveedor in PROVEEDORES_VALIDOS}
+    }
+
+
+@app.get("/proveedores")
+async def proveedores():
+    """Catálogo de modelos agrupado por categoría, para el selector del front.
+
+    Público a propósito: el usuario elige el modelo antes de autenticarse y no
+    expone nada sensible (solo si hay API key configurada, nunca su valor).
+    """
+    return {
+        "grupos": descripcion_publica(),
+        "por_defecto": proveedor_por_defecto(),
     }
 
 
