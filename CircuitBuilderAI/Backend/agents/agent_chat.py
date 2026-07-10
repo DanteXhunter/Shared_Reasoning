@@ -3,7 +3,7 @@ import json
 from agents.estado import EstadoGlobal, MensajeChat
 from agents.verbosidad import reglas_nivel
 from agents.seguridad import delimitar_entrada_usuario
-from providers.openai_provider import OpenAIProvider
+from providers.catalogo import crear_provider_chat
 
 
 SYSTEM_PROMPT = """Eres un asistente especializado en electrónica, circuitos eléctricos y ensamblaje en protoboard.
@@ -56,7 +56,7 @@ async def ejecutar_chat_agent(estado: EstadoGlobal) -> dict:
     """
     inicio = time.time()
 
-    proveedor = OpenAIProvider(variante="openai")
+    proveedor = crear_provider_chat(estado.get("proveedor", "openai"))
 
     historial: list[MensajeChat] = estado.get("historial_chat", [])
 

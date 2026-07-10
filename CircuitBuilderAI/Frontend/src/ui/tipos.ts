@@ -1,8 +1,8 @@
 import { Wrench, CircleHelp, BookOpen, type LucideIcon } from 'lucide-react'
 import type { Instruccion, Netlist } from '../circuit/types'
 
-// Proveedores que el agente extractor del backend soporta.
-export const PROVEEDORES = ['gemini', 'openai', 'nemotron', 'llama-vision']
+// La lista de proveedores la sirve el backend en GET /proveedores
+// (ver api/proveedores.ts). No se hardcodea aquí para que no se desincronicen.
 
 // Qué quiere hacer el usuario con su esquemático (mini-cuestionario de la
 // bienvenida cuando no escribe un prompt).

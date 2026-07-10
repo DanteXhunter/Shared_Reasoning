@@ -1,9 +1,9 @@
 from langgraph.graph import StateGraph, END
-from langchain_openai import ChatOpenAI
 from openai import RateLimitError, APIError
 from agents.estado import EstadoGlobal
 from agents.validador import validar_instrucciones
 from agents.verbosidad import reglas_nivel, normalizar_nivel
+from providers.catalogo import MODELOS_LANGGRAPH, crear_modelo_langgraph as crear_modelo
 import json
 import os
 import time
@@ -12,52 +12,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MAX_REINTENTOS = 3
-
-MODELOS_LANGGRAPH = {
-    "gemini": {
-        "model": "gemini-2.5-flash",
-        "api_key_env": "GEMINI_API_KEY",
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-    },
-    "gemini-free": {
-        "model": "gemini-2.5-flash-lite",
-        "api_key_env": "GEMINI_API_KEY",
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-    },
-    "openai": {
-        "model": "gpt-4o-mini",
-        "api_key_env": "OPENAI_API_KEY",
-        "base_url": None,
-    },
-    "nemotron": {
-        "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
-        "api_key_env": "NVIDIA_API_KEY",
-        "base_url": "https://integrate.api.nvidia.com/v1",
-    },
-    "llama-vision": {
-        "model": "meta/llama-3.2-11b-vision-instruct",
-        "api_key_env": "NVIDIA_API_KEY",
-        "base_url": "https://integrate.api.nvidia.com/v1",
-    },
-}
-
-
-def crear_modelo(proveedor: str) -> ChatOpenAI:
-    config = MODELOS_LANGGRAPH.get(proveedor)
-    if not config:
-        raise ValueError(f"Proveedor '{proveedor}' no tiene configuración para LangGraph.")
-
-    params = {
-        "model": config["model"],
-        "api_key": os.getenv(config["api_key_env"]),
-        "temperature": 0,
-        "max_retries": 0,
-    }
-
-    if config["base_url"]:
-        params["base_url"] = config["base_url"]
-
-    return ChatOpenAI(**params)
 
 
 # ─────────────────────────────────────────────
