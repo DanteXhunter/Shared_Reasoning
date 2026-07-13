@@ -9,10 +9,12 @@ const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 export async function planificarCircuito(
   netlist: Netlist,
   proveedor: string,
+  proveedorRazon: string,
   nivel: string,
 ): Promise<RespuestaPlanner> {
   const form = new FormData()
   form.append('proveedor', proveedor)
+  form.append('proveedor_razon', proveedorRazon)
   form.append('nivel', nivel)
   form.append('netlist', JSON.stringify(netlist))
 

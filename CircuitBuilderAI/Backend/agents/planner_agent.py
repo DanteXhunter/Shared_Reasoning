@@ -3,7 +3,11 @@ from openai import RateLimitError, APIError
 from agents.estado import EstadoGlobal
 from agents.validador import validar_instrucciones
 from agents.verbosidad import reglas_nivel, normalizar_nivel
-from providers.catalogo import MODELOS_LANGGRAPH, crear_modelo_langgraph as crear_modelo
+from providers.catalogo import (
+    MODELOS_LANGGRAPH,
+    crear_modelo_langgraph as crear_modelo,
+    mensaje_rate_limit,
+)
 import json
 import os
 import time
@@ -173,7 +177,9 @@ Antes de responder, verifica mentalmente:
 
 def nodo_planificar(estado: EstadoGlobal) -> dict:
     inicio = time.time()
-    modelo = crear_modelo(estado["proveedor"])
+    # Mismo criterio que ejecutar_planner: el planner usa el modelo de
+    # razonamiento, con el de visión como respaldo si no vino especificado.
+    modelo = crear_modelo(estado.get("proveedor_razon") or estado["proveedor"])
     netlist = estado["extractor_netlist"]
     intento = estado["planner_intento"]
     errores = estado["planner_errores"]
@@ -303,19 +309,23 @@ async def ejecutar_planner(estado_extractor: dict) -> dict:
     }
 
     grafo = crear_grafo_planner()
-    config = MODELOS_LANGGRAPH.get(estado_extractor["proveedor"], {})
+    # El planner razona sobre texto/JSON — no ve la imagen — así que usa el
+    # modelo de razonamiento elegido, no el de visión. Si no se especificó
+    # (llamadas antiguas o sesiones previas al selector), cae al de visión.
+    proveedor = estado_extractor.get("proveedor_razon") or estado_extractor["proveedor"]
+    config = MODELOS_LANGGRAPH.get(proveedor, {})
     modelo_activo = config.get("model", "desconocido")
-    proveedor = estado_extractor["proveedor"]
 
     try:
         estado_final = await grafo.ainvoke(estado_inicial)
-    except RateLimitError:
+    except RateLimitError as e:
         # Ver nota equivalente en extractor_agent.py: sin esto, la excepción
         # escapaba sin manejar y el 500 resultante llegaba sin headers de CORS.
+        mensaje, detalle = mensaje_rate_limit(proveedor, modelo_activo, e)
         return {
             "error": True,
-            "mensaje": f"Se agotó la cuota gratuita del proveedor '{proveedor}'. Cambia de modelo en el selector (ej. 'openai') o espera a que se reinicie el límite diario.",
-            "errores": [f"Rate limit excedido para '{modelo_activo}'."],
+            "mensaje": mensaje,
+            "errores": [detalle],
             "uso": {
                 "tokens_entrada": 0, "tokens_salida": 0, "tokens_total": 0,
                 "intentos": 0, "modelo_activo": modelo_activo, "tiempo_segundos": 0.0,

@@ -15,6 +15,7 @@ Categorías:
 """
 
 import os
+import re
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -33,14 +34,18 @@ CATEGORIAS = {
 
 # El orden de este dict es el orden en que el frontend pinta las opciones.
 CATALOGO = {
-    "gemini-free": {
-        "model": "gemini-2.5-flash-lite",
+    # Se usan los alias "-latest" en vez de versiones fijas (gemini-2.5-flash):
+    # Google retira las versiones y la llamada empieza a dar 404 "no longer
+    # available to new users". El alias lo reapunta Google al modelo vigente.
+    "gemini-flash-lite-latest": {
+        "model": "gemini-flash-lite-latest",
         "api_key_env": "GEMINI_API_KEY",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
         "categoria": "free",
-        "etiqueta": "Gemini 2.5 Flash Lite",
-        "descripcion": "Rápido y liviano. El único Gemini usable sin créditos.",
-        "por_defecto": True,
+        "etiqueta": "Gemini Flash Lite",
+        "descripcion": "Rápido y liviano. Tiene capa gratuita si el proyecto no factura.",
+        "por_defecto": False,
+        "roles": ["vision", "razon"],
     },
     "nemotron": {
         "model": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
@@ -50,6 +55,7 @@ CATALOGO = {
         "etiqueta": "Nemotron 3 Nano",
         "descripcion": "NVIDIA NIM. Alta latencia en el tier gratuito.",
         "por_defecto": False,
+        "roles": ["razon"],
     },
     "llama-vision": {
         "model": "meta/llama-3.2-11b-vision-instruct",
@@ -59,8 +65,9 @@ CATALOGO = {
         "etiqueta": "Llama 3.2 11B Vision",
         "descripcion": "NVIDIA NIM. Alta latencia en el tier gratuito.",
         "por_defecto": False,
+        "roles": ["vision"],
     },
-    "openai": {
+    "gpt-4o-mini": {
         "model": "gpt-4o-mini",
         "api_key_env": "OPENAI_API_KEY",
         "base_url": None,
@@ -68,15 +75,47 @@ CATALOGO = {
         "etiqueta": "GPT-4o mini",
         "descripcion": "Rápido y confiable. Se cobra por token consumido.",
         "por_defecto": False,
+        "roles": ["vision", "razon"],
     },
-    "gemini": {
-        "model": "gemini-2.5-flash",
+    "o3-mini": {
+        "model": "o3-mini",
+        "api_key_env": "OPENAI_API_KEY",
+        "base_url": None,
+        "categoria": "pago",
+        "etiqueta": "o3-mini",
+        "descripcion": "Modelo de razonamiento de OpenAI. No ve imágenes — solo para razonar sobre texto/JSON.",
+        "por_defecto": False,
+        "roles": ["razon"],
+    },
+    "gemini-flash-latest": {
+        "model": "gemini-flash-latest",
         "api_key_env": "GEMINI_API_KEY",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
         "categoria": "pago",
-        "etiqueta": "Gemini 2.5 Flash",
-        "descripcion": "Mejor visión para leer esquemáticos. Requiere créditos prepago.",
+        "etiqueta": "Gemini Flash",
+        "descripcion": "Mejor visión para leer esquemáticos. Requiere facturación activa.",
         "por_defecto": False,
+        "roles": ["vision", "razon"],
+    },
+    "gemini-3.5-flash": {
+        "model": "gemini-3.5-flash",
+        "api_key_env": "GEMINI_API_KEY",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "categoria": "pago",
+        "etiqueta": "Gemini 3.5 Flash",
+        "descripcion": "Modelo de última generación. Excelente velocidad y optimizado para agentes complejos.",
+        "por_defecto": True,
+        "roles": ["vision", "razon"],
+    },
+    "gemini-3.1-pro": {
+        "model": "gemini-3.1-pro-preview",
+        "api_key_env": "GEMINI_API_KEY",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "categoria": "pago",
+        "etiqueta": "Gemini 3.1 Pro",
+        "descripcion": "Máxima precisión de razonamiento espacial y visión para leer esquemáticos.",
+        "por_defecto": False,
+        "roles": ["vision", "razon"],
     },
     "ollama": {
         "model": OLLAMA_MODEL,
@@ -86,6 +125,7 @@ CATALOGO = {
         "etiqueta": f"Ollama ({OLLAMA_MODEL})",
         "descripcion": "Corre en tu máquina. Requiere Ollama activo con un modelo de visión.",
         "por_defecto": False,
+        "roles": ["vision"],
     },
 }
 
@@ -144,26 +184,95 @@ def crear_modelo_langgraph(proveedor: str):
     params = {
         "model": config["model"],
         "api_key": api_key_de(proveedor),
-        "temperature": 0,
         "max_retries": 0,
     }
+    if acepta_temperature(proveedor):
+        params["temperature"] = 0
     if config["base_url"]:
         params["base_url"] = config["base_url"]
 
     return ChatOpenAI(**params)
 
 
+def acepta_temperature(proveedor: str) -> bool:
+    """Los modelos de razonamiento de OpenAI (o1/o3/o4) rechazan `temperature`
+    explícito en la request — solo aceptan el valor por defecto de la API."""
+    config = _config(proveedor)
+    return not config["model"].startswith(("o1", "o3", "o4"))
+
+
 def crear_provider_chat(proveedor: str):
-    """OpenAIProvider apuntando al endpoint del proveedor pedido, para que el
+    """MLLMProvider apuntando al endpoint del proveedor pedido, para que el
     chat use el mismo modelo que el usuario eligió al subir el esquemático."""
-    from providers.openai_provider import OpenAIProvider
+    from providers.mllm_provider import MLLMProvider
 
     config = _config(proveedor)
-    return OpenAIProvider(
+    return MLLMProvider(
         model=config["model"],
         base_url=config["base_url"],
         api_key=api_key_de(proveedor),
     )
+
+
+# Modelo de RAZONAMIENTO del chat: las tareas estructuradas (clasificar la
+# intención, extraer/aplicar modificaciones al netlist o a las posiciones)
+# corren SIEMPRE con este modelo fijo, no con el que el usuario elige para
+# conversar o para leer imágenes. Son tareas texto→JSON que exigen consistencia
+# (CLAUDE.md §10, "clasificador a temperature=0 para consistencia"). El modelo
+# elegido se reserva para lo que sí aprovecha su fortaleza: la visión del
+# extractor y la respuesta conversacional que lee el usuario.
+PROVEEDOR_RAZONAMIENTO = "gpt-4o-mini"
+
+
+def crear_provider_razonamiento():
+    """Provider fijo para las tareas estructuradas del chat (ver arriba)."""
+    return crear_provider_chat(PROVEEDOR_RAZONAMIENTO)
+
+
+def mensaje_rate_limit(proveedor: str, modelo: str, e: Exception) -> tuple[str, str]:
+    """Traduce un 429 del proveedor a una causa concreta.
+
+    Un 429 no significa "se acabó tu tier gratuito". Google devuelve 429 también
+    cuando la API key pertenece a un proyecto SIN facturación (los modelos de
+    pago tienen cuota gratuita cero) y cuando se excede el límite por minuto de
+    una cuenta que sí paga. El texto crudo del error distingue los casos, así que
+    se conserva íntegro en el detalle.
+
+    Devuelve (mensaje_para_el_usuario, detalle_crudo_de_la_api).
+    """
+    crudo = str(e)
+    plano = crudo.lower().replace("_", "").replace("-", "")
+    categoria = CATALOGO.get(proveedor, {}).get("categoria")
+
+    # El cuerpo del 429 es un JSON largo; en la UI solo cabe la línea de cuota.
+    # El error completo queda en el log del backend.
+    print(f"[rate limit] {proveedor}/{modelo}: {crudo}")
+    resumen = re.search(r"limit: (\d+), model: ([\w.\-]+)", crudo)
+    detalle = (
+        f"Cuota excedida: {resumen.group(1)} peticiones/día para '{resumen.group(2)}'."
+        if resumen
+        else crudo[:200]
+    )
+
+    if "freetier" in plano:
+        mensaje = (
+            f"Agotaste la cuota gratuita de '{modelo}'. La API key que usas pertenece a un proyecto "
+            f"de Google sin facturación habilitada, así que Google le aplica los límites del free "
+            f"tier aunque hayas pagado en otro proyecto. Habilita el billing en ESE proyecto, o "
+            f"elige un modelo de la categoría Free."
+        )
+    elif categoria == "pago":
+        mensaje = (
+            f"'{modelo}' devolvió 429. Es un modelo de pago, así que casi siempre es el límite de "
+            f"peticiones por minuto: espera unos segundos y reintenta. Si persiste, revisa que el "
+            f"proyecto dueño de la API key tenga facturación activa y saldo."
+        )
+    else:
+        mensaje = (
+            f"Se agotó la cuota de '{modelo}'. Espera a que se reinicie el límite o elige otro modelo."
+        )
+
+    return mensaje, detalle
 
 
 def descripcion_publica() -> list[dict]:
@@ -184,6 +293,7 @@ def descripcion_publica() -> list[dict]:
             "descripcion": cfg["descripcion"],
             "categoria": cfg["categoria"],
             "por_defecto": cfg["por_defecto"],
+            "roles": cfg["roles"],
             "disponible": esta_configurado(clave),
             "tipo_facturacion": limites.get("tipo", "desconocido"),
             "peticiones_dia": limites.get("peticiones_dia"),

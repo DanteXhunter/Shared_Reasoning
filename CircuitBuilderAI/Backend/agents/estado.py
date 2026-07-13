@@ -43,6 +43,10 @@ class EstadoGlobal(TypedDict):
     imagen_base64: str
     mime_type: str
     proveedor: str
+    # Modelo para tareas de razonamiento (planner + chat: clasificar, modificar
+    # netlist/posiciones, responder) — separado del `proveedor` de visión, que
+    # solo usa el extractor. Ver providers/catalogo.py (roles "vision"/"razon").
+    proveedor_razon: str
     modo_interaccion: ModoInteraccion
     # basico | intermedio | experto — controla CUÁNTO explica la IA (§8: nivel
     # ≠ tipo de interacción). Ver agents/verbosidad.py.
