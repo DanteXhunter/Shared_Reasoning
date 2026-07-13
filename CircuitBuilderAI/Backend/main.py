@@ -413,6 +413,9 @@ async def analizar_esquematico(
 @app.post("/planificar")
 async def planificar_circuito(
     proveedor: str = Form(...),
+    # Modelo de razonamiento (planner). Vacío → usa el mismo que `proveedor`
+    # (retrocompatible con clientes que aún no mandan este campo).
+    proveedor_razon: str = Form(default=""),
     netlist: str = Form(...),
     nivel: str = Form(default="intermedio"),
     # 'modo' (tipo de interacción) se acepta por compatibilidad pero ya no rige
@@ -424,6 +427,13 @@ async def planificar_circuito(
         raise HTTPException(
             status_code=400,
             detail=f"Proveedor '{proveedor}' no válido. Valores válidos: {PROVEEDORES_VALIDOS}"
+        )
+
+    proveedor_razon = proveedor_razon or proveedor
+    if proveedor_razon not in PROVEEDORES_VALIDOS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Proveedor de razonamiento '{proveedor_razon}' no válido. Valores válidos: {PROVEEDORES_VALIDOS}"
         )
 
     try:
@@ -444,6 +454,7 @@ async def planificar_circuito(
         "imagen_base64": "",
         "mime_type": "",
         "proveedor": proveedor,
+        "proveedor_razon": proveedor_razon,
         "modo_interaccion": ModoInteraccion(modo) if modo in [m.value for m in ModoInteraccion] else ModoInteraccion.UNDER,
         "nivel": normalizar_nivel(nivel),
         "historial_chat": [],
@@ -471,24 +482,20 @@ async def planificar_circuito(
             }
         )
 
+    # El planner es una tarea de RAZONAMIENTO (no ve la imagen) — los tokens que
+    # consumió corresponden al modelo de razón, no al de visión. Antes esto se
+    # atribuía siempre a `proveedor`, así que con slots distintos el consumo de
+    # o3-mini (por ejemplo) se contaba como si fuera de Gemini.
     tokens_entrada = resultado.get("uso", {}).get("tokens_entrada", 0)
     tokens_salida = resultado.get("uso", {}).get("tokens_salida", 0)
-    metricas.registrar(tokens_entrada, tokens_salida, proveedor)
-    registrar_tokens_usuario(usuario, proveedor, tokens_entrada + tokens_salida)
+    metricas.registrar(tokens_entrada, tokens_salida, proveedor_razon)
+    registrar_tokens_usuario(usuario, proveedor_razon, tokens_entrada + tokens_salida)
 
-    # 2) Redacción por nivel (solo el texto; si falla, quedan las básicas).
-    instrucciones, uso_redaccion = await redactar_plan(
-        resultado["instrucciones"], normalizar_nivel(nivel), netlist_dict, proveedor
-    )
-    resultado["instrucciones"] = instrucciones
-    resultado["uso_redaccion"] = uso_redaccion
-    metricas.registrar(uso_redaccion.get("tokens_entrada", 0), uso_redaccion.get("tokens_salida", 0), "openai")
-    registrar_tokens_usuario(
-        usuario, "openai",
-        uso_redaccion.get("tokens_entrada", 0) + uso_redaccion.get("tokens_salida", 0),
-    )
-
-    resultado["metricas"] = metricas.resumen(proveedor)
+    # Las instrucciones ya vienen redactadas según el nivel desde el planner
+    # (una sola llamada LLM que usa reglas_nivel); no hay una segunda pasada de
+    # redacción — por eso el planner corre con el proveedor elegido y no se
+    # fuerza OpenAI a mitad del pipeline.
+    resultado["metricas"] = metricas.resumen(proveedor_razon)
 
     return resultado
 
@@ -497,6 +504,7 @@ async def planificar_circuito(
 async def procesar_esquematico(
     imagen: UploadFile = File(...),
     proveedor: str = Form(...),
+    proveedor_razon: str = Form(default=""),
     nivel: str = Form(default="intermedio"),
     modo: str = Form(default="UNDER"),
     usuario: Usuario = Depends(obtener_usuario_actual),
@@ -505,6 +513,13 @@ async def procesar_esquematico(
         raise HTTPException(
             status_code=400,
             detail=f"Proveedor '{proveedor}' no válido. Valores válidos: {PROVEEDORES_VALIDOS}"
+        )
+
+    proveedor_razon = proveedor_razon or proveedor
+    if proveedor_razon not in PROVEEDORES_VALIDOS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Proveedor de razonamiento '{proveedor_razon}' no válido. Valores válidos: {PROVEEDORES_VALIDOS}"
         )
 
     # Diego quitó esta validación en dev al refactorizar (modo ahora tiene
@@ -579,6 +594,7 @@ async def procesar_esquematico(
             "imagen_base64": "",
             "mime_type": "",
             "proveedor": proveedor,
+            "proveedor_razon": proveedor_razon,
             "modo_interaccion": ModoInteraccion(modo),
             "nivel": normalizar_nivel(nivel),
             "historial_chat": [],
@@ -604,29 +620,26 @@ async def procesar_esquematico(
             })
             return
 
+        # El planner es razonamiento, no visión — se atribuye a proveedor_razon
+        # (ver /planificar más arriba para el mismo criterio).
         tokens_entrada_plan = resultado_planner.get("uso", {}).get("tokens_entrada", 0)
         tokens_salida_plan = resultado_planner.get("uso", {}).get("tokens_salida", 0)
-        metricas.registrar(tokens_entrada_plan, tokens_salida_plan, proveedor)
-        registrar_tokens_usuario(usuario, proveedor, tokens_entrada_plan + tokens_salida_plan)
+        metricas.registrar(tokens_entrada_plan, tokens_salida_plan, proveedor_razon)
+        registrar_tokens_usuario(usuario, proveedor_razon, tokens_entrada_plan + tokens_salida_plan)
 
+        # Las instrucciones ya vienen redactadas según el nivel desde el planner
+        # (una sola llamada LLM que usa reglas_nivel); no hay una segunda pasada.
         instrucciones = resultado_planner["instrucciones"]
-        yield _evento_sse("estado", {"mensaje": "Redactando las instrucciones para tu nivel..."})
-
-        instrucciones, uso_redaccion = await redactar_plan(
-            resultado_planner["instrucciones"], normalizar_nivel(nivel), netlist, proveedor
-        )
-        metricas.registrar(uso_redaccion.get("tokens_entrada", 0), uso_redaccion.get("tokens_salida", 0), "openai")
-        registrar_tokens_usuario(
-            usuario, "openai",
-            uso_redaccion.get("tokens_entrada", 0) + uso_redaccion.get("tokens_salida", 0),
-        )
 
         yield _evento_sse("completo", {
             "mensaje": f"Listo, {len(instrucciones)} pasos generados",
             "instrucciones": instrucciones,
             "uso_extractor": resultado_extractor["uso"],
             "uso_planner": resultado_planner["uso"],
-            "metricas": metricas.resumen(proveedor),
+            # Este endpoint corre AMBOS roles (extractor=visión, planner=razón),
+            # así que se reportan por separado en vez de un solo "metricas".
+            "metricas_vision": metricas.resumen(proveedor),
+            "metricas_razon": metricas.resumen(proveedor_razon),
         })
 
     return StreamingResponse(generador(), media_type="text/event-stream")
@@ -703,6 +716,7 @@ async def chat(
     netlist: str = Form(...),
     historial: str = Form(...),
     proveedor: str = Form(default="openai"),
+    proveedor_razon: str = Form(default=""),
     nivel: str = Form(default="intermedio"),
     instrucciones: str = Form(default="[]"),
     sesion_id: str | None = Form(default=None),
@@ -713,6 +727,13 @@ async def chat(
         raise HTTPException(
             status_code=400,
             detail=f"Proveedor '{proveedor}' no válido. Valores válidos: {PROVEEDORES_VALIDOS}"
+        )
+
+    proveedor_razon = proveedor_razon or proveedor
+    if proveedor_razon not in PROVEEDORES_VALIDOS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Proveedor de razonamiento '{proveedor_razon}' no válido. Valores válidos: {PROVEEDORES_VALIDOS}"
         )
 
     verificar_frecuencia(f"user:{usuario.id}")
@@ -753,6 +774,7 @@ async def chat(
         "imagen_base64": "",
         "mime_type": "",
         "proveedor": proveedor,
+        "proveedor_razon": proveedor_razon,
         "modo_interaccion": modo,
         "nivel": normalizar_nivel(nivel),
         "historial_chat": historial_list,
@@ -789,11 +811,15 @@ async def chat(
 
         intencion = resultado.get("intencion_detectada", "responder")
 
+        # Todo el trabajo de /chat (clasificar, modificar, responder) es
+        # razonamiento sobre texto — no hay imagen en esta ruta — así que se
+        # atribuye a proveedor_razon, no a proveedor (visión).
+        #
         # El chat consume tokens en cualquier intención, así que se acumulan al
         # presupuesto del usuario aquí (no solo en la rama de modificación).
         uso_chat = resultado.get("uso", {})
         registrar_tokens_usuario(
-            usuario, proveedor,
+            usuario, proveedor_razon,
             uso_chat.get("tokens_entrada", 0) + uso_chat.get("tokens_salida", 0),
         )
 
@@ -806,7 +832,7 @@ async def chat(
         else:
             tokens_entrada = resultado.get("uso", {}).get("tokens_entrada", 0)
             tokens_salida = resultado.get("uso", {}).get("tokens_salida", 0)
-            metricas.registrar(tokens_entrada, tokens_salida, proveedor)
+            metricas.registrar(tokens_entrada, tokens_salida, proveedor_razon)
 
             yield _evento_sse("actualizado", {
                 "respuesta": resultado.get("respuesta", ""),

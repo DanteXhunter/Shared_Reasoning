@@ -126,7 +126,7 @@ function VistaPrincipal({ sesion, usuario, onNuevo, onCargarSesion, onCerrarSesi
   // Abre una sesión del historial (trae netlist, instrucciones y chat de la BD).
   async function abrirDelHistorial(id: string) {
     try {
-      onCargarSesion(await abrirSesion(id, { proveedor: sesion.proveedor, nivel: sesion.nivel }))
+      onCargarSesion(await abrirSesion(id, { proveedor: sesion.proveedor, proveedorRazon: sesion.proveedorRazon, nivel: sesion.nivel }))
     } catch {
       // Si falla la carga, se mantiene la sesión actual sin interrumpir al usuario.
     }
@@ -403,6 +403,7 @@ function VistaPrincipal({ sesion, usuario, onNuevo, onCargarSesion, onCerrarSesi
               netlist={sesion.netlist}
               instrucciones={instrucciones}
               proveedor={sesion.proveedor}
+              proveedorRazon={sesion.proveedorRazon}
               nivel={sesion.nivel}
               onInstruccionesActualizadas={(nuevas) => {
                 setInstrucciones(nuevas)

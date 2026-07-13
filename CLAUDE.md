@@ -54,16 +54,27 @@
 Es el **primer módulo funcional** de Shared Reasoning. Los tipos de interacción son detectados automáticamente por el Chat Agent y registrados para análisis de investigación.
 
 ### Pipeline principal
+El usuario elige DOS modelos por separado en el front (ver §7.1): uno de **VISIÓN**
+(lee la imagen) y uno de **RAZÓN** (planner + chat). Pueden ser proveedores distintos.
+
+```
 Usuario sube imagen
-→ Extractor Agent (LangGraph + gpt-4o-mini) → netlist JSON
-→ Planner Agent (algoritmo determinista + LLM) → coordenadas + instrucciones
+→ Extractor Agent (LangGraph + modelo de VISIÓN elegido) → netlist JSON
+→ Planner Agent (algoritmo determinista + modelo de RAZÓN elegido) → coordenadas + instrucciones
 → Endpoint /procesar (SSE) → frontend renderiza canvas y pasos
-Usuario escribe en el chat
+
+Usuario escribe en el chat (todo corre con el modelo de RAZÓN, nunca visión)
 → Chat Agent v2 → clasificador de intención (temperature=0)
 → "responder"            → Chat Agent base responde con texto
 → "modificar_netlist"    → LLM modifica netlist → Planner regenera todo
-→ "modificar_posiciones" → LLM extrae override → algoritmo aplica → Planner regenera
+→ "modificar_posiciones" → LLM extrae override NUMÉRICO ("mueve R1 a fila 10") → algoritmo aplica → Planner regenera
 → Endpoint /chat (SSE) → frontend actualiza canvas y pasos
+```
+
+⚠️ **Deuda conocida (detalle completo en §10):** pedidos ABIERTOS de "otro armado" /
+"arma diferente" (sin números concretos) NO regeneran nada — el extractor de
+posiciones no encuentra overrides que sacar y el chat cae en modo "responder" (solo
+texto, sin tocar canvas ni instrucciones).
 
 ---
 
@@ -108,7 +119,7 @@ find . -name "*.py" | grep -v venv | sort
 |------|-----------|
 | Backend | FastAPI + Uvicorn, Python 3.13 |
 | Agentes | LangGraph |
-| Modelo activo | OpenAI gpt-4o-mini |
+| Modelos | Catálogo multi-proveedor (`providers/catalogo.py`) — OpenAI, Gemini, NVIDIA NIM, Ollama local. Selector dual visión/razón en el front (ver §7.1) |
 | Frontend | React + Vite + TypeScript (Diego) |
 | Canvas | Konva.js + React-Konva (Diego) |
 | Estilos | Tailwind CSS v4 |
@@ -116,23 +127,29 @@ find . -name "*.py" | grep -v venv | sort
 ---
 
 ## 6. Estructura del backend
+```
 CircuitBuilderAI/Backend/
 ├── agents/
-│   ├── estado.py           # EstadoGlobal, ModoInteraccion, tipos compartidos
-│   ├── extractor_agent.py  # imagen → netlist JSON (LangGraph)
-│   ├── planner_agent.py    # netlist → coordenadas + instrucciones (LangGraph)
-│   ├── chat_agent.py       # Chat Agent base (#66) — responde preguntas
-│   └── chat_agent_v2.py    # Chat Agent extendido (#67/#68) — clasifica intención
+│   ├── estado.py           # EstadoGlobal, ModoInteraccion, tipos compartidos (incluye proveedor + proveedor_razon)
+│   ├── extractor_agent.py  # imagen → netlist JSON (LangGraph, usa proveedor de VISIÓN)
+│   ├── planner_agent.py    # netlist → coordenadas + instrucciones (LangGraph, usa proveedor de RAZÓN)
+│   ├── chat_agent.py       # Chat Agent base (#66) — responde preguntas (usa proveedor de RAZÓN)
+│   └── chat_agent_v2.py    # Chat Agent extendido (#67/#68) — clasifica intención (usa proveedor de RAZÓN)
 ├── providers/
 │   ├── base.py             # Interfaz abstracta LLMProvider
-│   ├── openai_provider.py  # gpt-4o-mini (proveedor activo)
-│   ├── gemini_provider.py  # descartado en producción
-│   └── nvidia_provider.py  # descartado por latencia
+│   ├── catalogo.py         # ÚNICA fuente de verdad: qué modelos existen, roles (vision/razon), precios, límites
+│   └── mllm_provider.py    # Cliente genérico OpenAI-compatible — sirve para TODOS los proveedores
 ├── schemas/
 │   └── netlist.py          # Schema Pydantic del netlist
-├── metricas.py             # Tokens, costos, límites diarios por proveedor
-├── main.py                 # FastAPI — /procesar, /analizar, /planificar
+├── metricas.py             # Tokens, costos, límites diarios — SEPARADOS por proveedor (dict interno por clave)
+├── main.py                 # FastAPI — /procesar, /analizar, /planificar, /chat, /proveedores
 └── CLAUDE.md               # Este archivo
+```
+
+> `gemini_provider.py` y `nvidia_provider.py` fueron eliminados (código muerto —
+> nadie los importaba; `catalogo.py` + `mllm_provider.py` cubren todos los
+> proveedores). `openai_provider.py`/`OpenAIProvider` se renombraron a
+> `mllm_provider.py`/`MLLMProvider` porque ya no es específico de OpenAI.
 
 ---
 
@@ -146,25 +163,76 @@ CircuitBuilderAI/Backend/
 
 ---
 
-## 7. Providers LLM — estado actual
+## 7. Providers LLM — estado actual (verificado 13-jul-2026)
 
-| Provider | Modelo | Estado | Razón |
-|----------|--------|--------|-------|
-| OpenAI | gpt-4o-mini | ✅ Activo | Rápido, confiable, bajo costo |
-| Gemini 2.5 Flash-Lite | free tier | ❌ Descartado | Throttling severo — una sola petición útil por sesión |
-| NVIDIA NIM Nemotron | nemotron-3-nano | ❌ Descartado | +70s de latencia en tier gratuito |
-| NVIDIA NIM Llama | llama-3.2-11b-vision | ❌ Descartado | ~60s de latencia, inaceptable |
+Todo pasa por un catálogo único (`providers/catalogo.py`) — **nunca hardcodear** un
+nombre de modelo fuera de ahí. Cada entrada declara `roles: ["vision", "razon"]` (o
+solo uno de los dos), que decide en qué selector del front aparece. Todos los
+proveedores hablan el protocolo `/v1/chat/completions` de OpenAI (solo cambia
+`base_url` + `model`), así que un solo cliente (`mllm_provider.py`) sirve para todos.
 
-**Principio clave:** specs en papel ≠ realidad bajo carga compartida. Todo proveedor nuevo debe pasar prueba empírica antes de adoptarse.
+| Clave en catálogo | Modelo real | Roles | Estado hoy | Por qué |
+|---|---|---|---|---|
+| `gemini-flash-lite-latest` | gemini-flash-lite-latest | visión+razón | ✅ Funciona | Gratis, sin billing. El más confiable del catálogo ahora mismo. |
+| `gpt-4o-mini` | gpt-4o-mini | visión+razón | ✅ Funciona | Pago, estable. **OJO:** en una prueba propia leyó peor un esquemático (capacitor mal ubicado) que el gemini gratis — no asumir "pago = mejor visión" sin medir. |
+| `o3-mini` | o3-mini | solo razón | ✅ Funciona | No ve imágenes. Rechaza `temperature` — manejado en `catalogo.acepta_temperature()`. |
+| `gemini-flash-latest` | gemini-flash-latest | visión+razón | ❌ 503 saturado | Google reporta "high demand". Probablemente alias apuntando al mismo modelo saturado que 3.5-flash. |
+| `gemini-3.5-flash` | gemini-3.5-flash | visión+razón | ❌ 503 saturado | Lanzado 19-may-2026 — demanda de estreno lo satura. |
+| `gemini-3.1-pro` (clave) | gemini-3.1-pro-preview | visión+razón | ❌ 503/timeout saturado | El nombre real de la API lleva sufijo `-preview` (sin él da 404 — ya corregido en el catálogo). Saturado igual. |
+| `nemotron`, `llama-vision` | NVIDIA NIM | razón / visión | ⚠️ No reprobado hoy | Descartados originalmente por latencia (~60-70s). No se volvieron a medir en esta sesión. |
+| `ollama` | configurable (`OLLAMA_MODEL`) | visión | ⚠️ Vivo pero no viable | Ver §7.2 — probado con qwen2.5vl: 48.5s/imagen + JSON inválido en el primer intento. |
+
+**Modelos de Google BLOQUEADOS para API keys nuevas (no es saturación, es política):**
+`gemini-2.5-flash` y `gemini-2.5-pro` dan **404** con *"is no longer available to new
+users"*. No es un nombre mal escrito — Google no deja usar esa generación a cuentas
+nuevas. No perder tiempo "arreglando" el nombre de estos dos.
+
+**Principio clave (sigue vigente):** specs en papel ≠ realidad bajo carga compartida.
+Probar con una llamada real antes de confiar en un modelo — el listado de
+`/v1beta/models` puede mostrar `generateContent: true` para un modelo que igual da 404
+en la llamada real (nos pasó dos veces).
+
+### 7.1 Arquitectura de dos slots: visión y razón
+
+Dos tareas muy distintas comparten el pipeline pero NO comparten modelo por default:
+- **Visión** (`proveedor`): el extractor lee la imagen del esquemático.
+- **Razón** (`proveedor_razon`): el planner (dónde va cada componente) + las 3 tareas
+  internas del chat (clasificar intención, modificar netlist, modificar posiciones,
+  responder). Es texto→JSON, nunca ve una imagen.
+
+El front tiene DOS `SelectorModelo` independientes (cada uno filtra el catálogo por
+`roles.includes('vision' | 'razon')`), y `Sesion` guarda `proveedor` +
+`proveedorRazon` por separado. Si `proveedor_razon` no se manda (retrocompatibilidad),
+el backend cae al mismo valor de `proveedor`.
+
+`GET /proveedores` expone el catálogo agrupado por categoría (pago/free/local) con
+`roles`, `disponible` (si hay API key) y costo/cuota — es la única fuente que debe
+consultar el front. Nunca hardcodear la lista de modelos ahí.
+
+### 7.2 Ollama (modelo local)
+
+Instalado y funcional en la Mac de desarrollo (M4, 16GB): `ollama serve` +
+`ollama pull qwen2.5vl`. Prueba real contra el esquemático de prueba del proyecto:
+**48.5 segundos** de latencia y **JSON inválido** en el primer intento (error de
+escape). Mismo veredicto que NVIDIA NIM en su momento: descalificante para uso
+interactivo. Queda como respaldo técnico, no como opción viable para la entrega.
+
+Importante para el despliegue: Ollama corre en la máquina que aloja el **backend**, no
+en el dispositivo de cada usuario final (la app es web — el usuario solo usa un
+navegador). Si algún día se despliega con Ollama como opción real, es una decisión de
+infraestructura del servidor, no algo que cada usuario configura.
 
 ### Agregar un nuevo proveedor
-1. Crear `providers/nuevo_provider.py` heredando de `LLMProvider`
-2. Implementar `analizar_esquematico`, `generar_instrucciones`, `chat`
-3. Agregar en `main.py`
-4. Agregar límites en `metricas.py`
-5. Agregar API key en `.env`
+1. Agregar una entrada en `providers/catalogo.py` (`CATALOGO`): `model`, `api_key_env`,
+   `base_url`, `categoria`, `etiqueta`, `descripcion`, `roles`.
+2. Agregar límites/costo en `metricas.py` (`LIMITES`) con la **misma clave** — si no
+   coinciden, el modelo queda `tipo_facturacion: "desconocido"` y no acumula costo.
+3. Agregar la API key en `.env`.
+4. Verificar con una llamada real antes de confiar en el catálogo (ver "Principio
+   clave" arriba).
 
-Si es compatible con OpenAI (`/v1/chat/completions`), reutilizar `OpenAIProvider` cambiando solo `base_url` y nombre del modelo.
+Todos los proveedores usan `MLLMProvider` (antes `OpenAIProvider`) — no crear una clase
+nueva salvo que el proveedor NO hable el protocolo OpenAI-compatible.
 
 ---
 
@@ -200,7 +268,15 @@ Si es compatible con OpenAI (`/v1/chat/completions`), reutilizar `OpenAIProvider
 - Colores de cable: rojo = VCC · negro = GND · amarillo = inter-componente
 - `fila 0` con `columna "+"` o `"-"` = rieles de poder
 - Posicionamiento: cada componente ocupa una fila · separación de una fila entre componentes
-- **El posicionamiento es determinista, no LLM.** `calcular_posiciones` en `planner_agent.py` asigna coordenadas con algoritmo fijo. El LLM solo genera instrucciones en lenguaje natural.
+
+**⚠️ El posicionamiento YA NO es determinista — esta sección estaba desactualizada.**
+`calcular_posiciones` no existe más. Hoy el LLM **propone** dónde va cada componente y
+qué cables usar (`planner_agent.py`, `PROMPT_PLANIFICAR`); `agents/validador.py`
+verifica la propuesta contra la física real (`agents/topologia.py` calcula qué pines
+DEBEN quedar conectados) y rebota errores concretos para que el LLM se corrija — hasta
+`MAX_REINTENTOS` veces. Relevante para el bug de §10: pedir "otro armado" es
+técnicamente posible porque el LLM ya decide la geometría libremente — el problema es
+que el chat no vuelve a invocar ese camino cuando el pedido es abierto.
 
 ---
 
@@ -212,6 +288,48 @@ Si es compatible con OpenAI (`/v1/chat/completions`), reutilizar `OpenAIProvider
 - **Validación de colisiones pendiente:** el sistema no verifica aún si dos componentes colisionan en la misma fila al aplicar un override. Deuda técnica conocida.
 - **`chat_agent_v2.py` en vez de modificar `chat_agent.py`:** el #66 ya estaba mergeado. Tocar ese archivo en otra rama genera conflictos innecesarios.
 - **Se accede a `proveedor.client` directamente:** el método `chat()` del provider no soporta system prompt ni contexto de circuito. Evita modificar la interfaz base que comparten todos los providers.
+
+### 🔴 Bug activo — pedidos ABIERTOS de rearmado no regeneran nada (próximo a implementar: Diego)
+
+**Síntoma:** el usuario pide algo como *"propón otro armado"* o *"arma diferente"* SIN
+dar números concretos (a diferencia de *"mueve R1 a la fila 10"*, que sí funciona). El
+chat responde con texto descriptivo bien redactado (a veces hasta con un diagrama en
+ASCII) pero **nunca actualiza el netlist, las instrucciones ni el protoboard** en el
+front.
+
+**Causa exacta, paso a paso:**
+1. El clasificador etiqueta el mensaje como `modificar_posiciones` (es razonable — el
+   usuario quiere mover componentes, no cambiar la topología eléctrica).
+2. `_aplicar_modificacion_posiciones()` (`agents/chat_agent_v2.py`) le pide al LLM que
+   extraiga `{componente_id: fila}` del mensaje — pero como el usuario no mencionó
+   ninguna fila, el LLM devuelve `overrides: {}` (vacío).
+3. En `ejecutar_chat_agent_v2()`, cuando `overrides` viene vacío, el código cae aquí:
+   ```python
+   if not overrides:
+       resultado = await ejecutar_chat_agent(estado)  # ← solo responde texto
+       resultado["intencion_detectada"] = intencion
+       return resultado
+   ```
+   Nunca se vuelve a llamar al planner. `instrucciones_actualizadas` nunca se manda al
+   front, así que `ChatPanel.onInstruccionesActualizadas` nunca se dispara y el
+   protoboard/pasos se quedan exactamente como estaban.
+
+**Direcciones de arreglo a evaluar (sin decidir todavía — Diego decide):**
+- **(a)** Cuando `overrides` viene vacío pero la intención es `modificar_posiciones`,
+  en vez de caer a "responder", volver a llamar al planner pidiéndole una
+  distribución **alternativa** (pasarle las instrucciones anteriores como contexto de
+  "qué NO repetir"). Reutiliza toda la validación física que el planner ya tiene.
+- **(b)** Agregar una intención nueva (ej. `proponer_alternativa`), separada de
+  `modificar_posiciones`, para no forzar al extractor de overrides numéricos a cubrir
+  un caso que no es el suyo — el clasificador tendría que distinguir "dame una fila
+  específica" de "dame cualquier distribución distinta a la actual".
+- Cualquiera de las dos debe seguir devolviendo `instrucciones_actualizadas` en la
+  respuesta — ese contrato ya funciona bien hoy para `modificar_netlist` y
+  `modificar_posiciones` con números explícitos, no hay que tocarlo.
+
+**Cómo reproducirlo:** subir cualquier esquemático, dejar que arme normal, y en el chat
+escribir *"propón otro armado y renderiza los pasos"* (sin mencionar filas). Comparar
+contra *"mueve R1 a la fila 10"*, que sí actualiza todo correctamente.
 
 ---
 
