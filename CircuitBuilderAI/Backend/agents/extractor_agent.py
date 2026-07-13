@@ -8,6 +8,7 @@ from providers.catalogo import (
     MODELOS_LANGGRAPH,
     crear_modelo_langgraph as crear_modelo,
     crear_provider_chat,
+    mensaje_rate_limit,
 )
 import base64
 import json
@@ -336,16 +337,17 @@ async def ejecutar_extractor(imagen_bytes: bytes, mime_type: str, proveedor: str
 
     try:
         estado_final = await grafo.ainvoke(estado_inicial)
-    except RateLimitError:
-        # Cuota agotada (ej. límite diario del free tier de Gemini). Sin este
-        # try/except la excepción escapaba sin manejar y FastAPI la convertía
-        # en un 500 sin headers de CORS — el navegador lo reportaba como un
-        # bloqueo de CORS, ocultando la causa real.
+    except RateLimitError as e:
+        # 429 del proveedor. Sin este try/except la excepción escapaba sin
+        # manejar y FastAPI la convertía en un 500 sin headers de CORS — el
+        # navegador lo reportaba como un bloqueo de CORS, ocultando la causa.
+        # El motivo real lo determina el cuerpo del error, no el proveedor.
         tiempo_total = round(time.time() - inicio, 2)
+        mensaje, detalle = mensaje_rate_limit(proveedor, modelo_activo, e)
         return {
             "error": True,
-            "mensaje": f"Se agotó la cuota gratuita del proveedor '{proveedor}'. Cambia de modelo en el selector (ej. 'openai') o espera a que se reinicie el límite diario.",
-            "errores": [f"Rate limit excedido para '{modelo_activo}'."],
+            "mensaje": mensaje,
+            "errores": [detalle],
             "uso": {
                 "tokens_entrada": 0,
                 "tokens_salida": 0,

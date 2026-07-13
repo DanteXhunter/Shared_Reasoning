@@ -43,8 +43,9 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
   const [imagen, setImagen] = useState<File | null>(null)
   const [preview, setPreview] = useState<string | null>(null)
   const [prompt, setPrompt] = useState('')
-  // Vacío hasta que SelectorModelo cargue el catálogo y aplique el default.
+  // Vacíos hasta que SelectorModelo cargue el catálogo y aplique el default.
   const [proveedor, setProveedor] = useState('')
+  const [proveedorRazon, setProveedorRazon] = useState('')
   const [fase, setFase] = useState<'form' | 'intencion' | 'cargando'>('form')
   const [mensajeCarga, setMensajeCarga] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -61,7 +62,7 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
   // Abre una sesión guardada y salta directo al workspace.
   async function abrir(id: string) {
     try {
-      onListo(await abrirSesion(id, { proveedor, nivel }))
+      onListo(await abrirSesion(id, { proveedor, proveedorRazon, nivel }))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No se pudo abrir la sesión.')
     }
@@ -114,7 +115,7 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
       if (!analisis.resultado) throw new Error(analisis.mensaje ?? 'No se pudo leer el esquemático.')
 
       setMensajeCarga('Planificando el armado en la protoboard…')
-      const plan = await planificarCircuito(analisis.resultado, proveedor, nivel)
+      const plan = await planificarCircuito(analisis.resultado, proveedor, proveedorRazon, nivel)
       if (!plan.instrucciones?.length) throw new Error(plan.mensaje ?? 'El planner no devolvió pasos.')
 
       // El nombre lo interpreta la IA a partir del circuito; si no vino,
@@ -137,6 +138,7 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
         prompt: promptEfectivo,
         intencion,
         proveedor,
+        proveedorRazon,
         nombre,
         nivel,
         imagenEsquema,
@@ -288,13 +290,21 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
                 style={{ background: 'var(--bg1)', border: '1px solid var(--border)', color: 'var(--ink)' }}
               />
 
-              {/* Modelo: catálogo agrupado (pago / free / locales) desde el backend */}
-              <div className="flex items-center gap-3">
-                <label className="text-xs uppercase tracking-widest" style={{ color: 'var(--ink-soft)' }}>Modelo</label>
-                <SelectorModelo value={proveedor} onChange={setProveedor} />
+              {/* Modelos: uno para leer la imagen (visión) y otro para el
+                  planner/chat (razonamiento) — cada catálogo agrupado en
+                  pago / free / locales, servido por el backend. */}
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+                <div className="flex items-center gap-3">
+                  <label className="text-xs uppercase tracking-widest" style={{ color: 'var(--ink-soft)' }}>Visión</label>
+                  <SelectorModelo rol="vision" value={proveedor} onChange={setProveedor} />
+                </div>
+                <div className="flex items-center gap-3">
+                  <label className="text-xs uppercase tracking-widest" style={{ color: 'var(--ink-soft)' }}>Razón</label>
+                  <SelectorModelo rol="razon" value={proveedorRazon} onChange={setProveedorRazon} />
+                </div>
                 <button
                   onClick={continuar}
-                  disabled={!imagen || !proveedor}
+                  disabled={!imagen || !proveedor || !proveedorRazon}
                   className="ml-auto px-5 py-2 rounded-xl accent-bg text-white text-sm font-medium shadow-lg hover:brightness-110 disabled:opacity-40 transition"
                 >
                   Comenzar →

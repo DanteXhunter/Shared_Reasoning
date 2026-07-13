@@ -25,7 +25,11 @@ export type Sesion = {
   netlist: Netlist | null
   prompt: string
   intencion: Intencion
+  // Modelo que leyó la imagen del esquemático (extractor).
   proveedor: string
+  // Modelo que resuelve el planner y el chat (clasificar, modificar,
+  // responder) — puede ser distinto al de visión.
+  proveedorRazon: string
   nombre: string
   nivel: Nivel
   // Data URL (base64) del esquemático subido, para mostrarlo en la pestaña

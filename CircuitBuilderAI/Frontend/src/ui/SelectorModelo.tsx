@@ -7,11 +7,16 @@ import {
   type CatalogoProveedores,
   type GrupoProveedores,
   type ModeloProveedor,
+  type Rol,
 } from '../api/proveedores'
 
 type Props = {
   value: string
   onChange: (id: string) => void
+  // Filtra el catálogo a los modelos que sirven para este rol (visión lee la
+  // imagen; razón resuelve el planner y el chat). Dos instancias de este
+  // componente con rol distinto son dos selectores independientes.
+  rol: Rol
 }
 
 const ICONO_CATEGORIA: Record<Categoria, LucideIcon> = {
@@ -26,7 +31,7 @@ const ICONO_CATEGORIA: Record<Categoria, LucideIcon> = {
 // Las categorías van en tabs, no apiladas: con 6 modelos la lista vertical
 // desbordaba la tarjeta de bienvenida. Cada tab muestra sus modelos en una
 // grilla de 2 columnas, así el panel crece a lo ancho y no a lo alto.
-function SelectorModelo({ value, onChange }: Props) {
+function SelectorModelo({ value, onChange, rol }: Props) {
   const [catalogo, setCatalogo] = useState<CatalogoProveedores | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [abierto, setAbierto] = useState(false)
@@ -41,8 +46,15 @@ function SelectorModelo({ value, onChange }: Props) {
       const datos = await obtenerProveedores()
       setCatalogo(datos)
       // El backend decide el modelo inicial; el front solo lo adopta si aún no
-      // hay uno elegido.
-      if (!value) onChange(datos.por_defecto)
+      // hay uno elegido. El default global puede no servir para este rol (ej.
+      // un modelo solo-visión no sirve como razonador), así que se valida
+      // contra el catálogo ya filtrado antes de adoptarlo — si no aplica, cae
+      // al primer modelo que sí tenga este rol.
+      if (!value) {
+        const conRol = datos.grupos.flatMap((g) => g.modelos).filter((m) => m.roles.includes(rol))
+        const candidato = conRol.find((m) => m.id === datos.por_defecto) ?? conRol[0]
+        if (candidato) onChange(candidato.id)
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error al cargar modelos.')
     }
@@ -53,20 +65,20 @@ function SelectorModelo({ value, onChange }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const todos = useMemo(
-    () => (catalogo?.grupos ?? []).flatMap((g) => g.modelos),
-    [catalogo],
+  // Solo se muestran las categorías que traen modelos aplicables a este rol.
+  const grupos: GrupoProveedores[] = useMemo(
+    () =>
+      (catalogo?.grupos ?? [])
+        .map((g) => ({ ...g, modelos: g.modelos.filter((m) => m.roles.includes(rol)) }))
+        .filter((g) => g.modelos.length > 0),
+    [catalogo, rol],
   )
+
+  const todos = useMemo(() => grupos.flatMap((g) => g.modelos), [grupos])
 
   const actual: ModeloProveedor | undefined = useMemo(
     () => todos.find((m) => m.id === value),
     [todos, value],
-  )
-
-  // Solo se muestran las categorías que traen modelos.
-  const grupos: GrupoProveedores[] = useMemo(
-    () => (catalogo?.grupos ?? []).filter((g) => g.modelos.length > 0),
-    [catalogo],
   )
 
   const grupoActivo = useMemo(

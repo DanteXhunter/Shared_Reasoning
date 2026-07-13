@@ -17,6 +17,7 @@ import type { Netlist, Instruccion } from './circuit/types'
 function DevApp({ onVolver }: { onVolver: () => void }) {
   const [imagen, setImagen] = useState<File | null>(null)
   const [proveedor, setProveedor] = useState('')
+  const [proveedorRazon, setProveedorRazon] = useState('')
   const [modo, setModo] = useState('UNDER')
   const [netlist, setNetlist] = useState<Netlist | null>(null)
   const [instrucciones, setInstrucciones] = useState<Instruccion[] | null>(null)
@@ -56,7 +57,7 @@ function DevApp({ onVolver }: { onVolver: () => void }) {
     setCargando(true)
     setError(null)
     try {
-      const res = await planificarCircuito(netlist, proveedor, modo)
+      const res = await planificarCircuito(netlist, proveedor, proveedorRazon, modo)
       if (res.instrucciones) setInstrucciones(res.instrucciones)
       else setError(res.mensaje ?? 'El planner no devolvió instrucciones.')
     } catch (e) {
@@ -115,7 +116,8 @@ function DevApp({ onVolver }: { onVolver: () => void }) {
             <input type="file" accept="image/*" className="hidden" onChange={(e) => setImagen(e.target.files?.[0] ?? null)} />
           </label>
 
-          <SelectorModelo value={proveedor} onChange={setProveedor} />
+          <SelectorModelo rol="vision" value={proveedor} onChange={setProveedor} />
+          <SelectorModelo rol="razon" value={proveedorRazon} onChange={setProveedorRazon} />
           <select value={modo} onChange={(e) => setModo(e.target.value)} className={selectClass} title="Modo de interacción">
             {['UNDER', 'OVER', 'ALONG', 'IN', 'ON'].map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
@@ -129,7 +131,7 @@ function DevApp({ onVolver }: { onVolver: () => void }) {
           </button>
           <button
             onClick={planificar}
-            disabled={!netlist || cargando}
+            disabled={!netlist || !proveedorRazon || cargando}
             className="px-4 py-1.5 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 hover:brightness-110 disabled:opacity-40 disabled:hover:brightness-100 transition text-sm font-medium shadow-lg shadow-emerald-900/30"
           >
             {cargando ? '⏳ …' : '② Planificar (coords)'}

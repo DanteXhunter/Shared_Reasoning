@@ -24,9 +24,9 @@ from metricas import LIMITES
 # usan el default. Los modelos locales (tipo "local" en metricas.LIMITES) están
 # exentos, por eso no aparecen aquí.
 PRESUPUESTO_TOKENS_DIA = {
-    "openai": 500_000,
-    "gemini": 1_000_000,
-    "gemini-free": 1_000_000,
+    "gpt-4o-mini": 500_000,
+    "gemini-flash-latest": 1_000_000,
+    "gemini-flash-lite-latest": 1_000_000,
     "nemotron": 1_000_000,
     "llama-vision": 1_000_000,
 }

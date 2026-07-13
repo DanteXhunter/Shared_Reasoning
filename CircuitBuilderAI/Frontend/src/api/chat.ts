@@ -22,18 +22,22 @@ export async function enviarMensajeChat(params: {
   netlist: Netlist
   historial: MensajeHistorial[]
   proveedor: string
+  // Modelo de razonamiento: clasifica, modifica netlist/posiciones y responde
+  // — todo el trabajo del chat, que no involucra leer la imagen.
+  proveedorRazon: string
   nivel: string
   instrucciones: Instruccion[]
   // Si viene, el backend persiste el par usuario/asistente en esa sesión (#73).
   sesionId?: string
   onEvento: (evento: EventoChat) => void
 }): Promise<void> {
-  const { netlist, historial, proveedor, nivel, instrucciones, sesionId, onEvento } = params
+  const { netlist, historial, proveedor, proveedorRazon, nivel, instrucciones, sesionId, onEvento } = params
 
   const form = new FormData()
   form.append('netlist', JSON.stringify(netlist))
   form.append('historial', JSON.stringify(historial))
   form.append('proveedor', proveedor)
+  form.append('proveedor_razon', proveedorRazon)
   form.append('nivel', nivel)
   form.append('instrucciones', JSON.stringify(instrucciones))
   if (sesionId) form.append('sesion_id', sesionId)

@@ -56,7 +56,10 @@ async def ejecutar_chat_agent(estado: EstadoGlobal) -> dict:
     """
     inicio = time.time()
 
-    proveedor = crear_provider_chat(estado.get("proveedor", "openai"))
+    # Responder es una tarea de razonamiento/conversación (no ve la imagen),
+    # así que usa el modelo de razonamiento elegido, con el de visión como
+    # respaldo si no vino especificado.
+    proveedor = crear_provider_chat(estado.get("proveedor_razon") or estado.get("proveedor", "gpt-4o-mini"))
 
     historial: list[MensajeChat] = estado.get("historial_chat", [])
 
