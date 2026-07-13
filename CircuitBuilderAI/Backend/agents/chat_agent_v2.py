@@ -5,7 +5,7 @@ from agents.agent_chat import ejecutar_chat_agent, SYSTEM_PROMPT, _construir_con
 from agents.planner_agent import ejecutar_planner
 from agents.seguridad import sanitizar_entrada_usuario, delimitar_entrada_usuario
 from providers.catalogo import crear_provider_chat
-from providers.openai_provider import OpenAIProvider
+from providers.mllm_provider import MLLMProvider
 
 
 PROMPT_CLASIFICADOR = """Analiza el siguiente mensaje del usuario en el contexto de un asistente de armado de circuitos eléctricos.
@@ -61,6 +61,16 @@ No agregues texto adicional ni bloques de código markdown.
 """
 
 
+def _kwargs_temperatura(proveedor: MLLMProvider) -> dict:
+    """Los modelos de razonamiento de OpenAI (o1/o3/o4, ej. o3-mini) rechazan
+    `temperature` explícito en la request. Sin este chequeo, seleccionar uno
+    de esos modelos como proveedor de razonamiento rompería el clasificador y
+    ambos modificadores del chat con un 400 de la API."""
+    if proveedor.model.startswith(("o1", "o3", "o4")):
+        return {}
+    return {"temperature": 0}
+
+
 def _error_proveedor(proveedor: str, e: Exception) -> dict:
     """El proveedor no respondió (caído, sin saldo, sin cuota). Se devuelve el
     mismo shape de error que el resto del agente para que /chat lo emita como
@@ -72,14 +82,14 @@ def _error_proveedor(proveedor: str, e: Exception) -> dict:
     }
 
 
-async def _clasificar_intencion(mensaje: str, proveedor: OpenAIProvider) -> str:
+async def _clasificar_intencion(mensaje: str, proveedor: MLLMProvider) -> str:
     """Llama al LLM para clasificar la intención del mensaje."""
     prompt = PROMPT_CLASIFICADOR.format(mensaje=delimitar_entrada_usuario(mensaje))
 
     respuesta = await proveedor.client.chat.completions.create(
         model=proveedor.model,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0,
+        **_kwargs_temperatura(proveedor),
     )
 
     contenido = respuesta.choices[0].message.content or ""
@@ -98,7 +108,7 @@ async def _clasificar_intencion(mensaje: str, proveedor: OpenAIProvider) -> str:
 async def _aplicar_modificacion_netlist(
     mensaje: str,
     netlist_actual: dict,
-    proveedor: OpenAIProvider,
+    proveedor: MLLMProvider,
 ) -> dict:
     """Pide al LLM que aplique el cambio al netlist y devuelve el netlist modificado."""
     prompt = PROMPT_MODIFICAR_NETLIST.format(
@@ -109,7 +119,7 @@ async def _aplicar_modificacion_netlist(
     respuesta = await proveedor.client.chat.completions.create(
         model=proveedor.model,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0,
+        **_kwargs_temperatura(proveedor),
     )
 
     contenido = respuesta.choices[0].message.content or ""
@@ -121,7 +131,7 @@ async def _aplicar_modificacion_netlist(
 async def _aplicar_modificacion_posiciones(
     mensaje: str,
     netlist: dict,
-    proveedor: OpenAIProvider,
+    proveedor: MLLMProvider,
 ) -> dict:
     """Pide al LLM que extraiga qué componentes mover y a qué fila. Retorna {comp_id: fila}."""
     componentes = [c["id"] for c in netlist.get("componentes", [])]
@@ -133,7 +143,7 @@ async def _aplicar_modificacion_posiciones(
     respuesta = await proveedor.client.chat.completions.create(
         model=proveedor.model,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0,
+        **_kwargs_temperatura(proveedor),
     )
 
     contenido = respuesta.choices[0].message.content or ""
@@ -164,7 +174,11 @@ async def ejecutar_chat_agent_v2(estado: EstadoGlobal) -> dict:
     # historial que ve el Chat Agent base) ya trabaja sobre el texto limpio.
     historial[-1]["contenido"] = sanitizar_entrada_usuario(historial[-1]["contenido"])
     ultimo_mensaje = historial[-1]["contenido"]
-    proveedor_id = estado.get("proveedor", "openai")
+    # Clasificar y modificar netlist/posiciones son tareas de razonamiento
+    # sobre texto/JSON — usan el modelo de razonamiento elegido, no el de
+    # visión (que es para leer la imagen del esquemático). Si no vino
+    # especificado, cae al de visión (retrocompatible con sesiones previas).
+    proveedor_id = estado.get("proveedor_razon") or estado.get("proveedor", "gpt-4o-mini")
     proveedor = crear_provider_chat(proveedor_id)
 
     # ── Clasificar intención ──

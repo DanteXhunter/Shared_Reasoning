@@ -56,7 +56,7 @@ export async function listarSesiones(): Promise<SesionResumen[]> {
 // (nivel viene del perfil del usuario; el esquemático no se guarda en el #73).
 export async function abrirSesion(
   id: string,
-  defaults: { proveedor: string; nivel: Sesion['nivel'] },
+  defaults: { proveedor: string; proveedorRazon: string; nivel: Sesion['nivel'] },
 ): Promise<Sesion> {
   const res = await fetchAutenticado(`${API_URL}/sesiones/${id}`)
   if (!res.ok) throw new Error('No se pudo abrir la sesión.')
@@ -75,6 +75,7 @@ export async function abrirSesion(
     prompt: '',
     intencion: 'armar',
     proveedor: defaults.proveedor,
+    proveedorRazon: defaults.proveedorRazon,
     nivel: defaults.nivel,
     // Si aún no hay chat, dejamos que VistaPrincipal muestre su bienvenida.
     mensajes: mensajes.length ? mensajes : undefined,

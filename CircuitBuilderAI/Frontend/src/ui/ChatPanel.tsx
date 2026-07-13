@@ -15,11 +15,12 @@ type Props = {
   netlist: Netlist | null
   instrucciones: Instruccion[]
   proveedor: string
+  proveedorRazon: string
   nivel: string
   onInstruccionesActualizadas: (instrucciones: Instruccion[]) => void
 }
 
-function ChatPanel({ mensajes, onMensajes, sesionId, netlist, instrucciones, proveedor, nivel, onInstruccionesActualizadas }: Props) {
+function ChatPanel({ mensajes, onMensajes, sesionId, netlist, instrucciones, proveedor, proveedorRazon, nivel, onInstruccionesActualizadas }: Props) {
   const [texto, setTexto] = useState('')
   const [cargando, setCargando] = useState(false)
   // Se siembra con los mensajes ya cargados para que el LLM tenga el contexto
@@ -49,6 +50,7 @@ function ChatPanel({ mensajes, onMensajes, sesionId, netlist, instrucciones, pro
       netlist,
       historial: nuevoHistorial,
       proveedor,
+      proveedorRazon,
       nivel,
       instrucciones,
       sesionId,

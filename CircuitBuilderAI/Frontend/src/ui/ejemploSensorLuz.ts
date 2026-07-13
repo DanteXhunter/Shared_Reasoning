@@ -10,7 +10,12 @@ export function sesionSensorLuz(): Sesion {
     netlist: null,
     prompt: 'Quiero armar un sensor de luz nocturna que encienda un LED cuando oscurece.',
     intencion: 'armar',
-    proveedor: 'openai',
+    // Sesión de demo con netlist:null — el chat queda deshabilitado
+    // (ChatPanel exige netlist), así que estos campos nunca llegan a una
+    // llamada real. '' es el mismo valor de "sin elegir" que usa Bienvenida
+    // antes de que el usuario elija en el selector — no un modelo inventado.
+    proveedor: '',
+    proveedorRazon: '',
     nombre: 'Sensor de luz nocturna',
     nivel: 'intermedio',
     mensajes: [

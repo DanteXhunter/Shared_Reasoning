@@ -8,16 +8,11 @@ import base64
 
 load_dotenv()
 
-MODELOS = {
-    "openai": "gpt-4o-mini",
-}
 
-
-class OpenAIProvider(LLMProvider):
+class MLLMProvider(LLMProvider):
     def __init__(
         self,
-        variante: str = "openai",
-        model: str | None = None,
+        model: str = "gpt-4o-mini",
         base_url: str | None = None,
         api_key: str | None = None,
     ):
@@ -30,7 +25,7 @@ class OpenAIProvider(LLMProvider):
             timeout=30.0,
             max_retries=0,
         )
-        self.model = model or MODELOS.get(variante, "gpt-4o-mini")
+        self.model = model
         self.tokens_consumidos_sesion = 0
 
     async def analizar_esquematico(self, imagen_bytes: bytes, mime_type: str) -> dict:
@@ -90,6 +85,7 @@ class OpenAIProvider(LLMProvider):
                         ],
                     }
                 ],
+                response_format={"type": "json_object"},
             )
             tokens_esta_llamada = response.usage.total_tokens
             self.tokens_consumidos_sesion += tokens_esta_llamada

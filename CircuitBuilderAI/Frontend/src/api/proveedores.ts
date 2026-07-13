@@ -2,14 +2,21 @@ const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
 export type Categoria = 'pago' | 'free' | 'local'
 
+// Para qué sirve el modelo: "vision" lee la imagen del esquemático (extractor),
+// "razon" resuelve tareas de texto/JSON (planner + chat: clasificar, modificar,
+// responder). Un modelo puede servir para ambos roles.
+export type Rol = 'vision' | 'razon'
+
 export type ModeloProveedor = {
-  // Clave que espera el backend en el campo `proveedor` de cada endpoint.
+  // Clave que espera el backend en el campo `proveedor`/`proveedor_razon` de
+  // cada endpoint.
   id: string
   modelo: string
   etiqueta: string
   descripcion: string
   categoria: Categoria
   por_defecto: boolean
+  roles: Rol[]
   // Hay API key configurada. No garantiza que la cuenta tenga saldo.
   disponible: boolean
   tipo_facturacion: 'saldo' | 'diario' | 'local' | 'desconocido'

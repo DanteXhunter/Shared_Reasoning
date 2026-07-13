@@ -10,7 +10,10 @@ export function sesionVitrinaComponentes(): Sesion {
     netlist: null,
     prompt: '',
     intencion: 'entender',
-    proveedor: 'openai',
+    // netlist:null → ChatPanel deshabilita el chat, estos campos son inertes
+    // (ver nota igual en ejemploSensorLuz.ts).
+    proveedor: '',
+    proveedorRazon: '',
     nombre: 'Vitrina de componentes (QA)',
     nivel: 'experto',
     mensajes: [
