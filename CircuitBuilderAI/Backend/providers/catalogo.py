@@ -264,6 +264,20 @@ def crear_provider_razonamiento():
     return crear_provider_chat(PROVEEDOR_RAZONAMIENTO)
 
 
+_PATRON_API_KEY = re.compile(
+    r"AIza[A-Za-z0-9_\-]{20,}"      # Google
+    r"|sk-[A-Za-z0-9_\-]{20,}"      # OpenAI (incluye el formato sk-proj-...)
+    r"|nvapi-[A-Za-z0-9_\-]{20,}"   # NVIDIA
+)
+
+
+def _ocultar_keys(texto: str) -> str:
+    """Reemplaza cualquier substring con forma de API key por [REDACTED] antes
+    de mandar el texto a un log. Algunos proveedores devuelven la key dentro
+    del propio mensaje de error (ej. "API key AIza... no es válida")."""
+    return _PATRON_API_KEY.sub("[REDACTED]", texto)
+
+
 def mensaje_rate_limit(proveedor: str, modelo: str, e: Exception) -> tuple[str, str]:
     """Traduce un 429 del proveedor a una causa concreta.
 
@@ -281,7 +295,7 @@ def mensaje_rate_limit(proveedor: str, modelo: str, e: Exception) -> tuple[str, 
 
     # El cuerpo del 429 es un JSON largo; en la UI solo cabe la línea de cuota.
     # El error completo queda en el log del backend.
-    print(f"[rate limit] {proveedor}/{modelo}: {crudo}")
+    print(f"[rate limit] {proveedor}/{modelo}: {_ocultar_keys(crudo)}")
     resumen = re.search(r"limit: (\d+), model: ([\w.\-]+)", crudo)
     detalle = (
         f"Cuota excedida: {resumen.group(1)} peticiones/día para '{resumen.group(2)}'."
