@@ -3,12 +3,24 @@ import type { Nivel } from '../ui/tipos'
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 const CLAVE_TOKEN = 'paralelo_token'
 
+// Flags de "¿hay una key propia guardada para este proveedor?" — nunca el
+// valor de la key (el backend nunca la devuelve, ver PATCH /auth/api-keys).
+export type ApiKeysConfiguradas = {
+  openai: boolean
+  gemini: boolean
+  nvidia: boolean
+}
+
 export type Usuario = {
   usuarioId: string
   nombre: string
   email: string
   nivel: Nivel
   nivelConfirmado: boolean
+  // Preset del carrusel (ej. "/avatares/avatar-3.png") o data URL de una foto
+  // subida. null/undefined = sin foto, se muestra la inicial del nombre.
+  fotoPerfil?: string | null
+  apiKeysConfiguradas: ApiKeysConfiguradas
 }
 
 // Callback opcional que App.tsx registra para reaccionar cuando el token
@@ -51,6 +63,8 @@ type RespuestaToken = {
   email: string
   nivel: Nivel
   nivel_confirmado: boolean
+  foto_perfil?: string | null
+  api_keys_configuradas: ApiKeysConfiguradas
 }
 
 function aUsuario(datos: RespuestaToken): Usuario {
@@ -66,6 +80,8 @@ function aUsuarioDesde(datos: RespuestaUsuario): Usuario {
     email: datos.email,
     nivel: datos.nivel,
     nivelConfirmado: datos.nivel_confirmado,
+    fotoPerfil: datos.foto_perfil,
+    apiKeysConfiguradas: datos.api_keys_configuradas,
   }
 }
 
@@ -122,6 +138,8 @@ type RespuestaUsuario = {
   email: string
   nivel: Nivel
   nivel_confirmado: boolean
+  foto_perfil?: string | null
+  api_keys_configuradas: ApiKeysConfiguradas
 }
 
 // Para restaurar la sesión al recargar la página: si hay un token guardado,
@@ -137,13 +155,14 @@ export async function obtenerUsuarioActual(): Promise<Usuario | null> {
   return aUsuarioDesde(await res.json())
 }
 
-// Actualiza nombre y/o correo del usuario (PATCH /auth/perfil). Devuelve el
-// usuario ya actualizado para refrescar la UI.
-export async function actualizarPerfil(datos: { nombre?: string; email?: string }): Promise<Usuario> {
+// Actualiza nombre, correo y/o foto del usuario (PATCH /auth/perfil).
+// `fotoPerfil: ''` quita la foto (vuelve a la inicial); undefined no la toca.
+// Devuelve el usuario ya actualizado para refrescar la UI.
+export async function actualizarPerfil(datos: { nombre?: string; email?: string; fotoPerfil?: string }): Promise<Usuario> {
   const res = await fetchAutenticado(`${API_URL}/auth/perfil`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(datos),
+    body: JSON.stringify({ nombre: datos.nombre, email: datos.email, foto_perfil: datos.fotoPerfil }),
   })
   if (!res.ok) throw new Error(await mensajeDeError(res))
   return aUsuarioDesde(await res.json())
@@ -157,4 +176,18 @@ export async function cambiarContrasena(contrasenaActual: string, contrasenaNuev
     body: JSON.stringify({ contrasena_actual: contrasenaActual, contrasena_nueva: contrasenaNueva }),
   })
   if (!res.ok) throw new Error(await mensajeDeError(res))
+}
+
+// Guarda las API keys propias del usuario (PATCH /auth/api-keys), cifradas en
+// el backend — nunca viajan de vuelta. Cada campo: undefined = no tocar esa
+// key, '' = borrarla, cualquier otro valor = guardarla. Devuelve el usuario
+// actualizado (con los flags apiKeysConfiguradas ya reflejando el cambio).
+export async function actualizarApiKeys(datos: { openai?: string; gemini?: string; nvidia?: string }): Promise<Usuario> {
+  const res = await fetchAutenticado(`${API_URL}/auth/api-keys`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(datos),
+  })
+  if (!res.ok) throw new Error(await mensajeDeError(res))
+  return aUsuarioDesde(await res.json())
 }

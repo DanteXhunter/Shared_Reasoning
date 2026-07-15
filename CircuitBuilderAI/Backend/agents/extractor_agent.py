@@ -100,6 +100,7 @@ class EstadoExtractor(TypedDict):
     imagen_base64: str
     mime_type: str
     proveedor: str
+    api_key_override: Optional[str]
     intento: int
     errores: list[str]
     respuesta_raw: Optional[str]
@@ -110,7 +111,7 @@ class EstadoExtractor(TypedDict):
 
 
 def nodo_analizar(estado: EstadoExtractor) -> dict:
-    modelo = crear_modelo(estado["proveedor"])
+    modelo = crear_modelo(estado["proveedor"], estado.get("api_key_override"))
     intento = estado["intento"]
     errores = estado["errores"]
 
@@ -297,7 +298,12 @@ def crear_grafo_extractor():
     return grafo.compile()
 
 
-async def ejecutar_extractor(imagen_bytes: bytes, mime_type: str, proveedor: str) -> dict:
+async def ejecutar_extractor(
+    imagen_bytes: bytes,
+    mime_type: str,
+    proveedor: str,
+    api_key_override: str | None = None,
+) -> dict:
     import time
     inicio = time.time()
 
@@ -323,6 +329,7 @@ async def ejecutar_extractor(imagen_bytes: bytes, mime_type: str, proveedor: str
         "imagen_base64": imagen_base64,
         "mime_type": mime_type,
         "proveedor": proveedor,
+        "api_key_override": api_key_override,
         "intento": 0,
         "errores": [],
         "respuesta_raw": None,
