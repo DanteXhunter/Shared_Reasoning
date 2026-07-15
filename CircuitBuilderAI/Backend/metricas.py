@@ -89,12 +89,6 @@ class Metricas:
         limite = config.get("peticiones_dia", 0)
         return max(0, limite - r["peticiones_hoy"])
 
-    def puede_hacer_peticion(self, proveedor: str) -> bool:
-        config = LIMITES.get(proveedor, {})
-        if config.get("tipo") in ["local", "saldo"]:
-            return True
-        return self.restantes_hoy(proveedor) > 0
-
     def peso_maximo_bytes(self, proveedor: str) -> int:
         config = LIMITES.get(proveedor, {})
         mb = config.get("peso_max_mb", 5)
