@@ -39,8 +39,6 @@ from providers.catalogo import (
 from providers.cifrado_keys import cifrar_api_keys, descifrar_api_keys
 from rate_limit import (
     verificar_frecuencia,
-    verificar_presupuesto_tokens,
-    registrar_tokens_usuario,
     FRECUENCIA_AUTH,
 )
 from collections import Counter
@@ -564,17 +562,6 @@ async def analizar_esquematico(
     api_key_efectiva = resolver_api_key_usuario(proveedor, descifrar_api_keys(usuario.api_keys_cifradas))
 
     verificar_frecuencia(f"user:{usuario.id}")
-    # El presupuesto de tokens y la cuota diaria compartida solo protegen la
-    # API key DEL SERVIDOR — si el usuario trae la suya para ESTE proveedor,
-    # esa llamada no la consume, así que ambos chequeos no aplican.
-    if not api_key_efectiva:
-        verificar_presupuesto_tokens(usuario, proveedor)
-
-        if not metricas.puede_hacer_peticion(proveedor):
-            raise HTTPException(
-                status_code=429,
-                detail="Se agotaron las peticiones diarias para este modelo. Cambia de proveedor o espera hasta mañana."
-            )
 
     if imagen.content_type not in TIPOS_IMAGEN_VALIDOS:
         raise HTTPException(
@@ -609,11 +596,11 @@ async def analizar_esquematico(
 
     tokens_entrada = resultado.get("uso", {}).get("tokens_entrada", 0)
     tokens_salida = resultado.get("uso", {}).get("tokens_salida", 0)
-    # No se registra en las métricas/cuota compartidas del servidor: esta
-    # llamada no las consumió (usó la key propia del usuario).
+    # Solo se atribuye al costo/consumo del servidor si la llamada usó la key
+    # del servidor — si el usuario trajo la suya, ese gasto no ocurrió en la
+    # cuenta común y no debe mezclarse en las métricas agregadas.
     if not api_key_efectiva:
         metricas.registrar(tokens_entrada, tokens_salida, proveedor)
-        registrar_tokens_usuario(usuario, proveedor, tokens_entrada + tokens_salida)
 
     resultado["metricas"] = metricas.resumen(proveedor)
 
@@ -655,14 +642,6 @@ async def planificar_circuito(
         raise HTTPException(status_code=400, detail="El campo 'netlist' no es un JSON válido.")
 
     verificar_frecuencia(f"user:{usuario.id}")
-    if not api_key_razon_efectiva:
-        verificar_presupuesto_tokens(usuario, proveedor)
-
-        if not metricas.puede_hacer_peticion(proveedor):
-            raise HTTPException(
-                status_code=429,
-                detail="Se agotaron las peticiones diarias para este modelo. Cambia de proveedor o espera hasta mañana."
-            )
 
     estado_extractor = {
         "imagen_base64": "",
@@ -705,7 +684,6 @@ async def planificar_circuito(
     tokens_salida = resultado.get("uso", {}).get("tokens_salida", 0)
     if not api_key_razon_efectiva:
         metricas.registrar(tokens_entrada, tokens_salida, proveedor_razon)
-        registrar_tokens_usuario(usuario, proveedor_razon, tokens_entrada + tokens_salida)
 
     # Las instrucciones ya vienen redactadas según el nivel desde el planner
     # (una sola llamada LLM que usa reglas_nivel); no hay una segunda pasada de
@@ -714,159 +692,6 @@ async def planificar_circuito(
     resultado["metricas"] = metricas.resumen(proveedor_razon)
 
     return resultado
-
-
-@app.post("/procesar")
-async def procesar_esquematico(
-    imagen: UploadFile = File(...),
-    proveedor: str = Form(...),
-    proveedor_razon: str = Form(default=""),
-    nivel: str = Form(default="intermedio"),
-    modo: str = Form(default="UNDER"),
-    usuario: Usuario = Depends(obtener_usuario_actual),
-):
-    if proveedor not in PROVEEDORES_VALIDOS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Proveedor '{proveedor}' no válido. Valores válidos: {PROVEEDORES_VALIDOS}"
-        )
-
-    proveedor_razon = proveedor_razon or proveedor
-    if proveedor_razon not in PROVEEDORES_VALIDOS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Proveedor de razonamiento '{proveedor_razon}' no válido. Valores válidos: {PROVEEDORES_VALIDOS}"
-        )
-
-    keys_por_grupo = descifrar_api_keys(usuario.api_keys_cifradas)
-    api_key_efectiva = resolver_api_key_usuario(proveedor, keys_por_grupo)
-    api_key_razon_efectiva = resolver_api_key_usuario(proveedor_razon, keys_por_grupo)
-
-    # Diego quitó esta validación en dev al refactorizar (modo ahora tiene
-    # default seguro), pero más abajo sigue usando ModoInteraccion(modo) sin
-    # resguardo — un valor inválido tronaría con 500. La conservo para que siga
-    # siendo un 400 claro.
-    if modo not in [m.value for m in ModoInteraccion]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Modo '{modo}' no válido. Valores válidos: {[m.value for m in ModoInteraccion]}"
-        )
-
-    verificar_frecuencia(f"user:{usuario.id}")
-    if not api_key_efectiva:
-        verificar_presupuesto_tokens(usuario, proveedor)
-
-    if imagen.content_type not in TIPOS_IMAGEN_VALIDOS:
-        raise HTTPException(
-            status_code=415,
-            detail=f"Tipo de archivo no soportado: '{imagen.content_type}'. Tipos válidos: {TIPOS_IMAGEN_VALIDOS}"
-        )
-
-    contenido = await imagen.read()
-
-    if len(contenido) == 0:
-        raise HTTPException(status_code=400, detail="El archivo está vacío.")
-
-    peso_maximo = metricas.peso_maximo_bytes(proveedor)
-    if len(contenido) > peso_maximo:
-        mb = peso_maximo // (1024 * 1024)
-        raise HTTPException(
-            status_code=413,
-            detail=f"La imagen supera el límite de {mb}MB para '{proveedor}'."
-        )
-
-    if not api_key_efectiva and not metricas.puede_hacer_peticion(proveedor):
-        raise HTTPException(
-            status_code=429,
-            detail="Se agotaron las peticiones diarias para este modelo. Cambia de proveedor o espera hasta mañana."
-        )
-
-    async def generador():
-        yield _evento_sse("estado", {"mensaje": "Analizando esquemático..."})
-
-        resultado_extractor = await ejecutar_extractor(contenido, imagen.content_type, proveedor, api_key_efectiva)
-
-        if resultado_extractor.get("error"):
-            yield _evento_sse("error", {
-                "etapa": "extractor",
-                "mensaje": resultado_extractor["mensaje"],
-                "errores": resultado_extractor["errores"],
-            })
-            return
-
-        tokens_entrada_ext = resultado_extractor.get("uso", {}).get("tokens_entrada", 0)
-        tokens_salida_ext = resultado_extractor.get("uso", {}).get("tokens_salida", 0)
-        if not api_key_efectiva:
-            metricas.registrar(tokens_entrada_ext, tokens_salida_ext, proveedor)
-            registrar_tokens_usuario(usuario, proveedor, tokens_entrada_ext + tokens_salida_ext)
-
-        netlist = resultado_extractor["resultado"]
-        num_componentes = len(netlist.get("componentes", []))
-        num_conexiones = len(netlist.get("conexiones", []))
-
-        yield _evento_sse("netlist_listo", {
-            "mensaje": f"Circuito detectado: {num_componentes} componentes, {num_conexiones} conexiones",
-            "netlist": netlist,
-            "uso": resultado_extractor["uso"],
-        })
-
-        yield _evento_sse("estado", {"mensaje": "Generando instrucciones de armado..."})
-
-        estado_extractor = {
-            "imagen_base64": "",
-            "mime_type": "",
-            "proveedor": proveedor,
-            "proveedor_razon": proveedor_razon,
-            "api_key_razon": api_key_razon_efectiva,
-            "modo_interaccion": ModoInteraccion(modo),
-            "nivel": normalizar_nivel(nivel),
-            "historial_chat": [],
-            "extractor_intento": resultado_extractor["uso"]["intentos"],
-            "extractor_errores": [],
-            "extractor_respuesta_raw": None,
-            "extractor_netlist": netlist,
-            "extractor_exito": True,
-            "extractor_tokens_entrada": tokens_entrada_ext,
-            "extractor_tokens_salida": tokens_salida_ext,
-            "extractor_tiempo": resultado_extractor["uso"]["tiempo_segundos"],
-        }
-
-        # La IA propone el armado ya redactado con la verbosidad del nivel —
-        # sin una segunda llamada de redacción aparte.
-        resultado_planner = await ejecutar_planner(estado_extractor)
-
-        if resultado_planner.get("error"):
-            yield _evento_sse("error", {
-                "etapa": "planner",
-                "mensaje": resultado_planner["mensaje"],
-                "errores": resultado_planner["errores"],
-            })
-            return
-
-        # El planner es razonamiento, no visión — se atribuye a proveedor_razon
-        # (ver /planificar más arriba para el mismo criterio).
-        tokens_entrada_plan = resultado_planner.get("uso", {}).get("tokens_entrada", 0)
-        tokens_salida_plan = resultado_planner.get("uso", {}).get("tokens_salida", 0)
-        if not api_key_razon_efectiva:
-            metricas.registrar(tokens_entrada_plan, tokens_salida_plan, proveedor_razon)
-            registrar_tokens_usuario(usuario, proveedor_razon, tokens_entrada_plan + tokens_salida_plan)
-
-        # Las instrucciones ya vienen redactadas según el nivel desde el planner
-        # (una sola llamada LLM que usa reglas_nivel); no hay una segunda pasada.
-        instrucciones = resultado_planner["instrucciones"]
-
-        yield _evento_sse("completo", {
-            "mensaje": f"Listo, {len(instrucciones)} pasos generados",
-            "instrucciones": instrucciones,
-            "uso_extractor": resultado_extractor["uso"],
-            "uso_planner": resultado_planner["uso"],
-            # Este endpoint corre AMBOS roles (extractor=visión, planner=razón),
-            # así que se reportan por separado en vez de un solo "metricas".
-            "metricas_vision": metricas.resumen(proveedor),
-            "metricas_razon": metricas.resumen(proveedor_razon),
-        })
-
-    return StreamingResponse(generador(), media_type="text/event-stream")
 
 
 NIVEL_A_MODO = {
@@ -967,8 +792,6 @@ async def chat(
     )
 
     verificar_frecuencia(f"user:{usuario.id}")
-    if not api_key_razon_efectiva:
-        verificar_presupuesto_tokens(usuario, proveedor)
 
     if nivel not in NIVEL_A_MODO:
         raise HTTPException(
@@ -1045,17 +868,13 @@ async def chat(
 
         # Todo el trabajo de /chat (clasificar, modificar, responder) es
         # razonamiento sobre texto — no hay imagen en esta ruta — así que se
-        # atribuye a proveedor_razon, no a proveedor (visión).
-        #
-        # El chat consume tokens en cualquier intención, así que se acumulan al
-        # presupuesto del usuario aquí (no solo en la rama de modificación).
-        # Si trajo su propia key, esta llamada no gastó presupuesto del servidor.
+        # atribuye a proveedor_razon, no a proveedor (visión). El chat consume
+        # tokens en cualquier intención, así que se registra siempre (no solo
+        # en la rama de modificación). Si trajo su propia key, esa llamada no
+        # se atribuye al consumo de la cuenta común.
         uso_chat = resultado.get("uso", {})
         if not api_key_razon_efectiva:
-            registrar_tokens_usuario(
-                usuario, proveedor_razon,
-                uso_chat.get("tokens_entrada", 0) + uso_chat.get("tokens_salida", 0),
-            )
+            metricas.registrar(uso_chat.get("tokens_entrada", 0), uso_chat.get("tokens_salida", 0), proveedor_razon)
 
         if intencion == "responder":
             yield _evento_sse("respuesta", {
@@ -1064,11 +883,6 @@ async def chat(
                 "uso": resultado.get("uso", {}),
             })
         else:
-            tokens_entrada = resultado.get("uso", {}).get("tokens_entrada", 0)
-            tokens_salida = resultado.get("uso", {}).get("tokens_salida", 0)
-            if not api_key_razon_efectiva:
-                metricas.registrar(tokens_entrada, tokens_salida, proveedor_razon)
-
             yield _evento_sse("actualizado", {
                 "respuesta": resultado.get("respuesta", ""),
                 "intencion_detectada": intencion,
