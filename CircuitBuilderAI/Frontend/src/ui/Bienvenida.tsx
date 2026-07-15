@@ -2,13 +2,20 @@ import { useEffect, useRef, useState } from 'react'
 import { ImageUp, Plus, Sun, Moon } from 'lucide-react'
 import { analizarEsquematico } from '../api/analizar'
 import { planificarCircuito } from '../api/planificar'
-import { crearSesion, listarSesiones, abrirSesion, type SesionResumen } from '../api/sesiones'
+import { crearSesion, abrirSesion } from '../api/sesiones'
 import { type Usuario } from '../api/auth'
 import PanelUsuario from './PanelUsuario'
 import TemaProvider, { type Tema } from './theme'
 import { LogoWordmark } from './Logo'
 import SelectorModelo from './SelectorModelo'
+import { comprimirImagen } from './imagenUtil'
+import { useHistorialSesiones, BuscadorHistorial, ItemHistorial, ToastHistorial } from './HistorialSesiones'
 import { INTENCIONES, type Intencion, type Sesion, type Nivel } from './tipos'
+
+// Lado máximo del esquemático guardado — más grande que el de la foto de
+// perfil (512px) porque un circuito necesita más detalle para seguir siendo
+// legible (valores de componentes, etiquetas de pines).
+const ESQUEMA_LADO_MAX = 1200
 
 type Props = {
   onListo: (sesion: Sesion) => void
@@ -51,13 +58,11 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
   const [error, setError] = useState<string | null>(null)
   const [arrastrando, setArrastrando] = useState(false)
   const [tema, setTema] = useState<Tema>('light')
-  const [historial, setHistorial] = useState<SesionResumen[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // Historial real de sesiones del usuario para el sidebar (#73/#88).
-  useEffect(() => {
-    listarSesiones().then(setHistorial).catch(() => setHistorial([]))
-  }, [])
+  // Historial real de sesiones del usuario para el sidebar (#73/#88), con
+  // búsqueda, renombrar y borrar (#88 ampliado).
+  const { filas: historial, aviso: avisoHistorial, busqueda, setBusqueda, renombrar, borrar } = useHistorialSesiones()
 
   // Abre una sesión guardada y salta directo al workspace.
   async function abrir(id: string) {
@@ -75,16 +80,6 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
     setPreview(url)
     return () => URL.revokeObjectURL(url)
   }, [imagen])
-
-  // Lee un archivo como data URL (base64) para persistirlo en la sesión.
-  function leerComoDataURL(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(reader.result as string)
-      reader.onerror = () => reject(reader.error)
-      reader.readAsDataURL(file)
-    })
-  }
 
   function recibirArchivo(file: File | undefined | null) {
     if (file && file.type.startsWith('image/')) {
@@ -110,7 +105,7 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
     setError(null)
     try {
       setMensajeCarga('Analizando tu esquemático…')
-      const imagenEsquema = await leerComoDataURL(imagen)
+      const imagenEsquema = await comprimirImagen(imagen, ESQUEMA_LADO_MAX)
       const analisis = await analizarEsquematico(imagen, proveedor)
       if (!analisis.resultado) throw new Error(analisis.mensaje ?? 'No se pudo leer el esquemático.')
 
@@ -126,7 +121,7 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
       // seguimos sin id: el workspace funciona igual, solo no se guardará.
       let id: string | undefined
       try {
-        id = await crearSesion({ nombre, netlist: analisis.resultado, instrucciones: plan.instrucciones })
+        id = await crearSesion({ nombre, netlist: analisis.resultado, instrucciones: plan.instrucciones, imagenEsquema })
       } catch {
         id = undefined
       }
@@ -151,6 +146,7 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
 
   return (
     <TemaProvider tema={tema} className="min-h-screen flex" style={{ color: 'var(--ink)', background: 'linear-gradient(135deg,var(--bg1),var(--bg2))' }}>
+      <ToastHistorial mensaje={avisoHistorial} />
       {/* ---- Sidebar: historial real de sesiones del usuario (#73) ---- */}
       <aside className="hidden md:flex w-64 flex-col shrink-0 p-4 gap-3" style={{ borderRight: '1px solid var(--border)' }}>
         <span className="text-sm font-semibold mb-1">Chats</span>
@@ -169,21 +165,22 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
           <span className="text-sm font-medium">Nuevo chat</span>
         </button>
 
+        <BuscadorHistorial value={busqueda} onChange={setBusqueda} />
+
         <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-1">
           {historial.length === 0 ? (
             <span className="text-xs px-3 py-2" style={{ color: 'var(--ink-soft)' }}>
-              Aún no tienes circuitos guardados.
+              {busqueda.trim() ? 'Sin resultados.' : 'Aún no tienes circuitos guardados.'}
             </span>
           ) : (
             historial.map((c) => (
-              <button
+              <ItemHistorial
                 key={c.id}
-                onClick={() => abrir(c.id)}
-                className="text-left text-sm px-3 py-2 rounded-xl truncate transition hover:[background:color-mix(in_srgb,var(--accent)_15%,transparent)]"
-                style={{ color: 'var(--ink-soft)' }}
-              >
-                {c.nombre}
-              </button>
+                fila={c}
+                onAbrir={() => abrir(c.id)}
+                onRenombrar={(nombre) => renombrar(c.id, nombre)}
+                onBorrar={() => borrar(c.id)}
+              />
             ))
           )}
         </div>
@@ -191,7 +188,11 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
         {/* Cuenta del usuario (nombre/correo, CRUD de perfil, cerrar sesión) */}
         {usuario && (
           <div className="shrink-0 pt-2" style={{ borderTop: '1px solid var(--border)' }}>
-            <PanelUsuario usuario={usuario} onActualizar={onActualizarUsuario} onCerrarSesion={onCerrarSesion} />
+            <PanelUsuario
+              usuario={usuario}
+              onActualizar={onActualizarUsuario}
+              onCerrarSesion={onCerrarSesion}
+            />
           </div>
         )}
       </aside>

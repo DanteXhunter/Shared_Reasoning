@@ -47,6 +47,11 @@ class EstadoGlobal(TypedDict):
     # netlist/posiciones, responder) — separado del `proveedor` de visión, que
     # solo usa el extractor. Ver providers/catalogo.py (roles "vision"/"razon").
     proveedor_razon: str
+    # API key propia del usuario para cada slot (opcional). Si viene vacía,
+    # se usa la del servidor (ver providers/catalogo.py api_key_de). Nunca se
+    # persiste — solo viaja en la petición.
+    api_key: str
+    api_key_razon: str
     modo_interaccion: ModoInteraccion
     # basico | intermedio | experto — controla CUÁNTO explica la IA (§8: nivel
     # ≠ tipo de interacción). Ver agents/verbosidad.py.

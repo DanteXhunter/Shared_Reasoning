@@ -26,6 +26,8 @@ function App() {
   const [nivel, setNivel] = useState<Nivel>('intermedio')
   const [sesion, setSesion] = useState<Sesion | null>(null)
   // Usuario autenticado (nombre/correo) para el panel de cuenta del sidebar.
+  // Las API keys propias del usuario ahora se guardan cifradas en el backend
+  // (Mi cuenta → API keys propias) — ya no viven en el estado de App.
   const [usuario, setUsuario] = useState<Usuario | null>(null)
   // Mientras se confirma si el token guardado sigue siendo válido, no se
   // muestra nada — evita el parpadeo de "intro" antes de decidir a dónde ir.
@@ -78,7 +80,17 @@ function App() {
 
   if (modoDev) return <DevApp onVolver={() => setModoDev(false)} />
 
-  if (sesion) return <VistaPrincipal key={sesion.id ?? sesion.nombre} sesion={sesion} usuario={usuario} onNuevo={() => { setSesion(null); setPaso('bienvenida') }} onCargarSesion={setSesion} onCerrarSesion={cerrarSesion} />
+  if (sesion) return (
+    <VistaPrincipal
+      key={sesion.id ?? sesion.nombre}
+      sesion={sesion}
+      usuario={usuario}
+      onNuevo={() => { setSesion(null); setPaso('bienvenida') }}
+      onCargarSesion={setSesion}
+      onCerrarSesion={cerrarSesion}
+      onActualizarUsuario={setUsuario}
+    />
+  )
 
   switch (paso) {
     case 'intro':
@@ -88,7 +100,15 @@ function App() {
     case 'encuesta':
       return <EncuestaNivel onElegir={alElegirNivel} />
     case 'bienvenida':
-      return <Bienvenida nivel={nivel} onListo={setSesion} usuario={usuario} onActualizarUsuario={setUsuario} onCerrarSesion={cerrarSesion} />
+      return (
+        <Bienvenida
+          nivel={nivel}
+          onListo={setSesion}
+          usuario={usuario}
+          onActualizarUsuario={setUsuario}
+          onCerrarSesion={cerrarSesion}
+        />
+      )
   }
 }
 
