@@ -179,7 +179,10 @@ def nodo_planificar(estado: EstadoGlobal) -> dict:
     inicio = time.time()
     # Mismo criterio que ejecutar_planner: el planner usa el modelo de
     # razonamiento, con el de visión como respaldo si no vino especificado.
-    modelo = crear_modelo(estado.get("proveedor_razon") or estado["proveedor"])
+    modelo = crear_modelo(
+        estado.get("proveedor_razon") or estado["proveedor"],
+        estado.get("api_key_razon"),
+    )
     netlist = estado["extractor_netlist"]
     intento = estado["planner_intento"]
     errores = estado["planner_errores"]

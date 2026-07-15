@@ -32,6 +32,17 @@ CATEGORIAS = {
     "local": "Locales",
 }
 
+# Grupo de credencial: una API key sirve para TODOS los modelos del mismo
+# proveedor (la key de Gemini cubre gemini-flash-lite y gemini-3.5-flash por
+# igual). El front pinta un campo por grupo, no uno por modelo ni por slot, y
+# manda la key del grupo al que pertenece el modelo elegido. Los modelos
+# locales no tienen grupo (no llevan key). Ver descripcion_publica().
+GRUPOS_CREDENCIAL = {
+    "OPENAI_API_KEY": {"id": "openai", "etiqueta": "OpenAI"},
+    "GEMINI_API_KEY": {"id": "gemini", "etiqueta": "Google Gemini"},
+    "NVIDIA_API_KEY": {"id": "nvidia", "etiqueta": "NVIDIA"},
+}
+
 # El orden de este dict es el orden en que el frontend pinta las opciones.
 CATALOGO = {
     # Se usan los alias "-latest" en vez de versiones fijas (gemini-2.5-flash):
@@ -169,6 +180,22 @@ def esta_configurado(proveedor: str) -> bool:
     return bool(os.getenv(config["api_key_env"]))
 
 
+def resolver_api_key_usuario(proveedor: str, keys_por_grupo: dict[str, str]) -> str | None:
+    """Key propia del usuario que corresponde a este modelo, o None si no dio
+    ninguna para su proveedor real (en ese caso se cae a la key del servidor).
+
+    `keys_por_grupo` viene del front con la forma {"openai": "...", "gemini":
+    "...", "nvidia": "..."} — un campo por proveedor real, nunca por slot. Así
+    es imposible mandar por accidente una key de Gemini a un endpoint de
+    OpenAI: si el modelo elegido es de OpenAI pero el usuario solo dio key de
+    Gemini, esto devuelve None (no la de Gemini) y el llamador cae al servidor.
+    """
+    grupo = grupo_credencial_de(proveedor)
+    if grupo is None:
+        return None
+    return keys_por_grupo.get(grupo["id"]) or None
+
+
 def proveedor_por_defecto() -> str:
     for clave, cfg in CATALOGO.items():
         if cfg["por_defecto"]:
@@ -176,14 +203,19 @@ def proveedor_por_defecto() -> str:
     return PROVEEDORES_VALIDOS[0]
 
 
-def crear_modelo_langgraph(proveedor: str):
-    """Modelo de LangChain para los grafos del extractor y del planner."""
+def crear_modelo_langgraph(proveedor: str, api_key_override: str | None = None):
+    """Modelo de LangChain para los grafos del extractor y del planner.
+
+    `api_key_override`: si el usuario trajo su propia API key (ver §Config en
+    CLAUDE.md), se usa esa en vez de la del servidor — nunca se persiste, solo
+    viaja en la petición.
+    """
     from langchain_openai import ChatOpenAI
 
     config = _config(proveedor)
     params = {
         "model": config["model"],
-        "api_key": api_key_de(proveedor),
+        "api_key": api_key_override or api_key_de(proveedor),
         "max_retries": 0,
     }
     if acepta_temperature(proveedor):
@@ -201,16 +233,19 @@ def acepta_temperature(proveedor: str) -> bool:
     return not config["model"].startswith(("o1", "o3", "o4"))
 
 
-def crear_provider_chat(proveedor: str):
+def crear_provider_chat(proveedor: str, api_key_override: str | None = None):
     """MLLMProvider apuntando al endpoint del proveedor pedido, para que el
-    chat use el mismo modelo que el usuario eligió al subir el esquemático."""
+    chat use el mismo modelo que el usuario eligió al subir el esquemático.
+
+    `api_key_override`: ver crear_modelo_langgraph.
+    """
     from providers.mllm_provider import MLLMProvider
 
     config = _config(proveedor)
     return MLLMProvider(
         model=config["model"],
         base_url=config["base_url"],
-        api_key=api_key_de(proveedor),
+        api_key=api_key_override or api_key_de(proveedor),
     )
 
 
@@ -275,6 +310,24 @@ def mensaje_rate_limit(proveedor: str, modelo: str, e: Exception) -> tuple[str, 
     return mensaje, detalle
 
 
+def grupo_credencial_de(proveedor: str) -> dict | None:
+    """Grupo de credencial del proveedor (openai/gemini/nvidia), o None si es
+    local (no lleva key)."""
+    env = _config(proveedor)["api_key_env"]
+    return GRUPOS_CREDENCIAL.get(env)
+
+
+def grupos_credencial_publicos() -> list[dict]:
+    """Grupos de credencial presentes en el catálogo, en orden de aparición —
+    el front pinta un campo de API key por cada uno."""
+    vistos: dict[str, dict] = {}
+    for cfg in CATALOGO.values():
+        grupo = GRUPOS_CREDENCIAL.get(cfg["api_key_env"])
+        if grupo and grupo["id"] not in vistos:
+            vistos[grupo["id"]] = grupo
+    return list(vistos.values())
+
+
 def descripcion_publica() -> list[dict]:
     """Catálogo tal como lo consume el frontend: agrupado por categoría."""
     from metricas import LIMITES
@@ -286,6 +339,7 @@ def descripcion_publica() -> list[dict]:
 
     for clave, cfg in CATALOGO.items():
         limites = LIMITES.get(clave, {})
+        grupo_cred = GRUPOS_CREDENCIAL.get(cfg["api_key_env"])
         grupos[cfg["categoria"]]["modelos"].append({
             "id": clave,
             "modelo": cfg["model"],
@@ -297,6 +351,8 @@ def descripcion_publica() -> list[dict]:
             "disponible": esta_configurado(clave),
             "tipo_facturacion": limites.get("tipo", "desconocido"),
             "peticiones_dia": limites.get("peticiones_dia"),
+            # A qué campo de API key propia pertenece este modelo (None = local).
+            "grupo_credencial": grupo_cred["id"] if grupo_cred else None,
         })
 
     return list(grupos.values())

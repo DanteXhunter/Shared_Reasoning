@@ -4,7 +4,9 @@ import { fetchAutenticado } from './auth'
 // URL del backend (viene del .env: VITE_API_URL). Fallback a localhost:8000.
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
-// Envía la imagen del esquemático al backend y devuelve el netlist.
+// Envía la imagen del esquemático al backend y devuelve el netlist. Las API
+// keys propias del usuario (si las configuró en Mi cuenta) las resuelve el
+// backend por su cuenta — no viajan en esta petición.
 // Lanza Error con un mensaje legible si algo falla.
 export async function analizarEsquematico(
   imagen: File,

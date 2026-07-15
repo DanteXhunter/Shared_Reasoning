@@ -21,6 +21,8 @@ from auth import (
     UsuarioResponse,
     PerfilRequest,
     ContrasenaRequest,
+    ApiKeysRequest,
+    ApiKeysConfiguradas,
     hashear_contrasena,
     verificar_contrasena,
     crear_token,
@@ -31,7 +33,10 @@ from providers.catalogo import (
     PROVEEDORES_VALIDOS,
     descripcion_publica,
     proveedor_por_defecto,
+    grupos_credencial_publicos,
+    resolver_api_key_usuario,
 )
+from providers.cifrado_keys import cifrar_api_keys, descifrar_api_keys
 from rate_limit import (
     verificar_frecuencia,
     verificar_presupuesto_tokens,
@@ -97,11 +102,24 @@ async def proveedores():
     return {
         "grupos": descripcion_publica(),
         "por_defecto": proveedor_por_defecto(),
+        # Campos de API key propia que el front debe ofrecer (uno por proveedor).
+        "grupos_credencial": grupos_credencial_publicos(),
     }
 
 
 def _ip_de(request: Request) -> str:
     return request.client.host if request.client else "desconocida"
+
+
+def _api_keys_configuradas(usuario: Usuario) -> ApiKeysConfiguradas:
+    """Flags de "¿el usuario tiene una key propia guardada?" por proveedor —
+    nunca el valor. Es lo único que ve el front para mostrar "configurada ✓"."""
+    keys = descifrar_api_keys(usuario.api_keys_cifradas)
+    return ApiKeysConfiguradas(
+        openai=bool(keys.get("openai")),
+        gemini=bool(keys.get("gemini")),
+        nvidia=bool(keys.get("nvidia")),
+    )
 
 
 @app.post("/auth/registro", response_model=TokenResponse, status_code=201)
@@ -133,6 +151,8 @@ def registro(datos: RegistroRequest, request: Request, db: Session = Depends(get
         email=usuario.email,
         nivel=usuario.nivel,
         nivel_confirmado=usuario.nivel_confirmado,
+        foto_perfil=usuario.foto_perfil,
+        api_keys_configuradas=_api_keys_configuradas(usuario),
     )
 
 
@@ -152,6 +172,8 @@ def login(datos: LoginRequest, request: Request, db: Session = Depends(get_db)):
         email=usuario.email,
         nivel=usuario.nivel,
         nivel_confirmado=usuario.nivel_confirmado,
+        foto_perfil=usuario.foto_perfil,
+        api_keys_configuradas=_api_keys_configuradas(usuario),
     )
 
 
@@ -163,6 +185,8 @@ def usuario_actual(usuario: Usuario = Depends(obtener_usuario_actual)):
         email=usuario.email,
         nivel=usuario.nivel,
         nivel_confirmado=usuario.nivel_confirmado,
+        foto_perfil=usuario.foto_perfil,
+        api_keys_configuradas=_api_keys_configuradas(usuario),
     )
 
 
@@ -181,6 +205,11 @@ def actualizar_perfil(
             raise HTTPException(status_code=409, detail="Ya existe una cuenta con este email.")
         usuario.email = datos.email
 
+    if datos.foto_perfil is not None:
+        # Cadena vacía = "quitar foto" (vuelve a mostrarse la inicial del
+        # nombre); cualquier otro valor no vacío es el preset o data URL nuevo.
+        usuario.foto_perfil = datos.foto_perfil or None
+
     try:
         db.commit()
     except IntegrityError:
@@ -194,6 +223,8 @@ def actualizar_perfil(
         email=usuario.email,
         nivel=usuario.nivel,
         nivel_confirmado=usuario.nivel_confirmado,
+        foto_perfil=usuario.foto_perfil,
+        api_keys_configuradas=_api_keys_configuradas(usuario),
     )
 
 
@@ -207,6 +238,40 @@ def cambiar_contrasena(
         raise HTTPException(status_code=400, detail="La contraseña actual es incorrecta.")
     usuario.contrasena_hash = hashear_contrasena(datos.contrasena_nueva)
     db.commit()
+
+
+@app.patch("/auth/api-keys", response_model=UsuarioResponse)
+def actualizar_api_keys(
+    datos: ApiKeysRequest,
+    usuario: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+):
+    """Guarda las API keys propias del usuario, cifradas (ver
+    providers/cifrado_keys.py). Nunca se devuelve el valor de vuelta — la
+    respuesta solo trae los flags de api_keys_configuradas."""
+    actuales = descifrar_api_keys(usuario.api_keys_cifradas)
+
+    for grupo_id, valor in datos.model_dump().items():
+        if valor is None:
+            continue  # no vino en la petición: no tocar esa key
+        if valor == "":
+            actuales.pop(grupo_id, None)  # "" = borrar esa key
+        else:
+            actuales[grupo_id] = valor
+
+    usuario.api_keys_cifradas = cifrar_api_keys(actuales) if actuales else None
+    db.commit()
+    db.refresh(usuario)
+
+    return UsuarioResponse(
+        usuario_id=str(usuario.id),
+        nombre=usuario.nombre,
+        email=usuario.email,
+        nivel=usuario.nivel,
+        nivel_confirmado=usuario.nivel_confirmado,
+        foto_perfil=usuario.foto_perfil,
+        api_keys_configuradas=_api_keys_configuradas(usuario),
+    )
 
 
 @app.patch("/auth/nivel", response_model=NivelResponse)
@@ -236,6 +301,10 @@ class SesionCrear(BaseModel):
     instrucciones: list
     modo: str | None = None
     metricas: dict | None = None
+    # Data URL (base64) del esquemático, ya comprimida en el navegador
+    # (~1200px de lado máximo) antes de mandarla — el límite generoso cubre
+    # esquemáticos con detalle sin dejar pasar algo sin comprimir.
+    imagen_esquema: str | None = Field(default=None, max_length=4_000_000)
 
 
 class SesionCreada(BaseModel):
@@ -258,6 +327,20 @@ class SesionCompleta(BaseModel):
     metricas: dict | None
     fecha: datetime | None
     historial: list[dict]
+    imagen_esquema: str | None
+
+
+class SesionRenombrar(BaseModel):
+    nombre: str = Field(min_length=1, max_length=200)
+
+
+class ResultadoBusqueda(BaseModel):
+    id: str
+    nombre: str
+    fecha: datetime | None
+    # Pedacito del mensaje donde apareció la búsqueda (estilo WhatsApp).
+    # None si la coincidencia fue solo en el nombre de la conversación.
+    fragmento: str | None = None
 
 
 @app.post("/sesiones", response_model=SesionCreada, status_code=201)
@@ -273,6 +356,7 @@ def crear_sesion(
         instrucciones=datos.instrucciones,
         modo_detectado=datos.modo,
         metricas=datos.metricas,
+        imagen_esquema=datos.imagen_esquema,
     )
     db.add(sesion)
     db.commit()
@@ -297,6 +381,79 @@ def listar_sesiones(
             nombre=s.nombre,
             fecha=s.fecha,
             modo_detectado=s.modo_detectado,
+        )
+        for s in sesiones
+    ]
+
+
+def _fragmento(contenido: str, consulta: str, alrededor: int = 40) -> str:
+    """Recorta `contenido` a un pedacito centrado en la primera aparición de
+    `consulta` (estilo WhatsApp). Si no la encuentra (no debería pasar, ya que
+    solo se llama sobre mensajes que sí matchearon), corta el inicio."""
+    idx = contenido.lower().find(consulta.lower())
+    if idx == -1:
+        recorte = contenido[:80]
+        return f"{recorte}…" if len(contenido) > 80 else recorte
+    inicio = max(0, idx - alrededor)
+    fin = min(len(contenido), idx + len(consulta) + alrededor)
+    prefijo = "…" if inicio > 0 else ""
+    sufijo = "…" if fin < len(contenido) else ""
+    return f"{prefijo}{contenido[inicio:fin]}{sufijo}"
+
+
+# IMPORTANTE: esta ruta debe declararse ANTES de /sesiones/{sesion_id} — si no,
+# FastAPI interpreta "buscar" como el valor de sesion_id y nunca llega acá.
+@app.get("/sesiones/buscar", response_model=list[ResultadoBusqueda])
+def buscar_sesiones(
+    q: str,
+    usuario: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+):
+    """Busca en el NOMBRE de la conversación y en el CONTENIDO de sus
+    mensajes (estilo WhatsApp) — nunca en netlist/instrucciones, que no son
+    texto conversacional."""
+    consulta = q.strip()
+    if not consulta:
+        return []
+
+    patron = f"%{consulta}%"
+
+    # Un mensaje por sesión (el más antiguo que matchee) para el fragmento.
+    mensajes_coincidentes = (
+        db.query(ChatMensaje)
+        .join(Sesion, Sesion.id == ChatMensaje.sesion_id)
+        .filter(Sesion.usuario_id == usuario.id, ChatMensaje.contenido.ilike(patron))
+        .order_by(ChatMensaje.sesion_id, ChatMensaje.timestamp.asc())
+        .all()
+    )
+    fragmento_por_sesion: dict[str, str] = {}
+    for m in mensajes_coincidentes:
+        sid = str(m.sesion_id)
+        if sid not in fragmento_por_sesion:
+            fragmento_por_sesion[sid] = _fragmento(m.contenido, consulta)
+
+    ids_por_nombre = {
+        str(s.id)
+        for s in db.query(Sesion).filter(Sesion.usuario_id == usuario.id, Sesion.nombre.ilike(patron)).all()
+    }
+
+    ids_relevantes = set(fragmento_por_sesion) | ids_por_nombre
+    if not ids_relevantes:
+        return []
+
+    sesiones = (
+        db.query(Sesion)
+        .filter(Sesion.id.in_(ids_relevantes))
+        .order_by(Sesion.fecha.desc())
+        .all()
+    )
+
+    return [
+        ResultadoBusqueda(
+            id=str(s.id),
+            nombre=s.nombre,
+            fecha=s.fecha,
+            fragmento=fragmento_por_sesion.get(str(s.id)),
         )
         for s in sesiones
     ]
@@ -329,7 +486,47 @@ def obtener_sesion(
         metricas=sesion.metricas,
         fecha=sesion.fecha,
         historial=historial,
+        imagen_esquema=sesion.imagen_esquema,
     )
+
+
+@app.patch("/sesiones/{sesion_id}", response_model=SesionResumen)
+def renombrar_sesion(
+    sesion_id: str,
+    datos: SesionRenombrar,
+    usuario: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+):
+    sesion = _buscar_sesion_del_usuario(db, sesion_id, usuario.id)
+    if sesion is None:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada.")
+
+    sesion.nombre = datos.nombre
+    db.commit()
+    db.refresh(sesion)
+
+    return SesionResumen(
+        id=str(sesion.id),
+        nombre=sesion.nombre,
+        fecha=sesion.fecha,
+        modo_detectado=sesion.modo_detectado,
+    )
+
+
+@app.delete("/sesiones/{sesion_id}", status_code=204)
+def borrar_sesion(
+    sesion_id: str,
+    usuario: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+):
+    sesion = _buscar_sesion_del_usuario(db, sesion_id, usuario.id)
+    if sesion is None:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada.")
+
+    # Los ChatMensaje de esta sesión se borran solos (ondelete="CASCADE" en el
+    # modelo) — no hace falta borrarlos a mano acá.
+    db.delete(sesion)
+    db.commit()
 
 
 def _buscar_sesion_del_usuario(db: Session, sesion_id: str, usuario_id):
@@ -360,14 +557,24 @@ async def analizar_esquematico(
             detail=f"Proveedor '{proveedor}' no válido. Valores válidos: {PROVEEDORES_VALIDOS}"
         )
 
-    verificar_frecuencia(f"user:{usuario.id}")
-    verificar_presupuesto_tokens(usuario, proveedor)
+    # API keys propias del usuario, guardadas cifradas en su cuenta (Mi cuenta
+    # → API keys propias) — una por proveedor real, no por slot. Si el
+    # proveedor elegido no tiene key propia guardada, se cae a la del servidor
+    # y esa llamada sí consume el presupuesto compartido.
+    api_key_efectiva = resolver_api_key_usuario(proveedor, descifrar_api_keys(usuario.api_keys_cifradas))
 
-    if not metricas.puede_hacer_peticion(proveedor):
-        raise HTTPException(
-            status_code=429,
-            detail="Se agotaron las peticiones diarias para este modelo. Cambia de proveedor o espera hasta mañana."
-        )
+    verificar_frecuencia(f"user:{usuario.id}")
+    # El presupuesto de tokens y la cuota diaria compartida solo protegen la
+    # API key DEL SERVIDOR — si el usuario trae la suya para ESTE proveedor,
+    # esa llamada no la consume, así que ambos chequeos no aplican.
+    if not api_key_efectiva:
+        verificar_presupuesto_tokens(usuario, proveedor)
+
+        if not metricas.puede_hacer_peticion(proveedor):
+            raise HTTPException(
+                status_code=429,
+                detail="Se agotaron las peticiones diarias para este modelo. Cambia de proveedor o espera hasta mañana."
+            )
 
     if imagen.content_type not in TIPOS_IMAGEN_VALIDOS:
         raise HTTPException(
@@ -388,7 +595,7 @@ async def analizar_esquematico(
             detail=f"La imagen supera el límite de {mb}MB para '{proveedor}'."
         )
 
-    resultado = await ejecutar_extractor(contenido, imagen.content_type, proveedor)
+    resultado = await ejecutar_extractor(contenido, imagen.content_type, proveedor, api_key_efectiva)
 
     if resultado.get("error"):
         raise HTTPException(
@@ -402,8 +609,11 @@ async def analizar_esquematico(
 
     tokens_entrada = resultado.get("uso", {}).get("tokens_entrada", 0)
     tokens_salida = resultado.get("uso", {}).get("tokens_salida", 0)
-    metricas.registrar(tokens_entrada, tokens_salida, proveedor)
-    registrar_tokens_usuario(usuario, proveedor, tokens_entrada + tokens_salida)
+    # No se registra en las métricas/cuota compartidas del servidor: esta
+    # llamada no las consumió (usó la key propia del usuario).
+    if not api_key_efectiva:
+        metricas.registrar(tokens_entrada, tokens_salida, proveedor)
+        registrar_tokens_usuario(usuario, proveedor, tokens_entrada + tokens_salida)
 
     resultado["metricas"] = metricas.resumen(proveedor)
 
@@ -436,25 +646,30 @@ async def planificar_circuito(
             detail=f"Proveedor de razonamiento '{proveedor_razon}' no válido. Valores válidos: {PROVEEDORES_VALIDOS}"
         )
 
+    keys_por_grupo = descifrar_api_keys(usuario.api_keys_cifradas)
+    api_key_razon_efectiva = resolver_api_key_usuario(proveedor_razon, keys_por_grupo)
+
     try:
         netlist_dict = json.loads(netlist)
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="El campo 'netlist' no es un JSON válido.")
 
     verificar_frecuencia(f"user:{usuario.id}")
-    verificar_presupuesto_tokens(usuario, proveedor)
+    if not api_key_razon_efectiva:
+        verificar_presupuesto_tokens(usuario, proveedor)
 
-    if not metricas.puede_hacer_peticion(proveedor):
-        raise HTTPException(
-            status_code=429,
-            detail="Se agotaron las peticiones diarias para este modelo. Cambia de proveedor o espera hasta mañana."
-        )
+        if not metricas.puede_hacer_peticion(proveedor):
+            raise HTTPException(
+                status_code=429,
+                detail="Se agotaron las peticiones diarias para este modelo. Cambia de proveedor o espera hasta mañana."
+            )
 
     estado_extractor = {
         "imagen_base64": "",
         "mime_type": "",
         "proveedor": proveedor,
         "proveedor_razon": proveedor_razon,
+        "api_key_razon": api_key_razon_efectiva,
         "modo_interaccion": ModoInteraccion(modo) if modo in [m.value for m in ModoInteraccion] else ModoInteraccion.UNDER,
         "nivel": normalizar_nivel(nivel),
         "historial_chat": [],
@@ -488,8 +703,9 @@ async def planificar_circuito(
     # o3-mini (por ejemplo) se contaba como si fuera de Gemini.
     tokens_entrada = resultado.get("uso", {}).get("tokens_entrada", 0)
     tokens_salida = resultado.get("uso", {}).get("tokens_salida", 0)
-    metricas.registrar(tokens_entrada, tokens_salida, proveedor_razon)
-    registrar_tokens_usuario(usuario, proveedor_razon, tokens_entrada + tokens_salida)
+    if not api_key_razon_efectiva:
+        metricas.registrar(tokens_entrada, tokens_salida, proveedor_razon)
+        registrar_tokens_usuario(usuario, proveedor_razon, tokens_entrada + tokens_salida)
 
     # Las instrucciones ya vienen redactadas según el nivel desde el planner
     # (una sola llamada LLM que usa reglas_nivel); no hay una segunda pasada de
@@ -522,6 +738,10 @@ async def procesar_esquematico(
             detail=f"Proveedor de razonamiento '{proveedor_razon}' no válido. Valores válidos: {PROVEEDORES_VALIDOS}"
         )
 
+    keys_por_grupo = descifrar_api_keys(usuario.api_keys_cifradas)
+    api_key_efectiva = resolver_api_key_usuario(proveedor, keys_por_grupo)
+    api_key_razon_efectiva = resolver_api_key_usuario(proveedor_razon, keys_por_grupo)
+
     # Diego quitó esta validación en dev al refactorizar (modo ahora tiene
     # default seguro), pero más abajo sigue usando ModoInteraccion(modo) sin
     # resguardo — un valor inválido tronaría con 500. La conservo para que siga
@@ -533,7 +753,8 @@ async def procesar_esquematico(
         )
 
     verificar_frecuencia(f"user:{usuario.id}")
-    verificar_presupuesto_tokens(usuario, proveedor)
+    if not api_key_efectiva:
+        verificar_presupuesto_tokens(usuario, proveedor)
 
     if imagen.content_type not in TIPOS_IMAGEN_VALIDOS:
         raise HTTPException(
@@ -554,7 +775,7 @@ async def procesar_esquematico(
             detail=f"La imagen supera el límite de {mb}MB para '{proveedor}'."
         )
 
-    if not metricas.puede_hacer_peticion(proveedor):
+    if not api_key_efectiva and not metricas.puede_hacer_peticion(proveedor):
         raise HTTPException(
             status_code=429,
             detail="Se agotaron las peticiones diarias para este modelo. Cambia de proveedor o espera hasta mañana."
@@ -563,7 +784,7 @@ async def procesar_esquematico(
     async def generador():
         yield _evento_sse("estado", {"mensaje": "Analizando esquemático..."})
 
-        resultado_extractor = await ejecutar_extractor(contenido, imagen.content_type, proveedor)
+        resultado_extractor = await ejecutar_extractor(contenido, imagen.content_type, proveedor, api_key_efectiva)
 
         if resultado_extractor.get("error"):
             yield _evento_sse("error", {
@@ -575,8 +796,9 @@ async def procesar_esquematico(
 
         tokens_entrada_ext = resultado_extractor.get("uso", {}).get("tokens_entrada", 0)
         tokens_salida_ext = resultado_extractor.get("uso", {}).get("tokens_salida", 0)
-        metricas.registrar(tokens_entrada_ext, tokens_salida_ext, proveedor)
-        registrar_tokens_usuario(usuario, proveedor, tokens_entrada_ext + tokens_salida_ext)
+        if not api_key_efectiva:
+            metricas.registrar(tokens_entrada_ext, tokens_salida_ext, proveedor)
+            registrar_tokens_usuario(usuario, proveedor, tokens_entrada_ext + tokens_salida_ext)
 
         netlist = resultado_extractor["resultado"]
         num_componentes = len(netlist.get("componentes", []))
@@ -595,6 +817,7 @@ async def procesar_esquematico(
             "mime_type": "",
             "proveedor": proveedor,
             "proveedor_razon": proveedor_razon,
+            "api_key_razon": api_key_razon_efectiva,
             "modo_interaccion": ModoInteraccion(modo),
             "nivel": normalizar_nivel(nivel),
             "historial_chat": [],
@@ -624,8 +847,9 @@ async def procesar_esquematico(
         # (ver /planificar más arriba para el mismo criterio).
         tokens_entrada_plan = resultado_planner.get("uso", {}).get("tokens_entrada", 0)
         tokens_salida_plan = resultado_planner.get("uso", {}).get("tokens_salida", 0)
-        metricas.registrar(tokens_entrada_plan, tokens_salida_plan, proveedor_razon)
-        registrar_tokens_usuario(usuario, proveedor_razon, tokens_entrada_plan + tokens_salida_plan)
+        if not api_key_razon_efectiva:
+            metricas.registrar(tokens_entrada_plan, tokens_salida_plan, proveedor_razon)
+            registrar_tokens_usuario(usuario, proveedor_razon, tokens_entrada_plan + tokens_salida_plan)
 
         # Las instrucciones ya vienen redactadas según el nivel desde el planner
         # (una sola llamada LLM que usa reglas_nivel); no hay una segunda pasada.
@@ -736,8 +960,15 @@ async def chat(
             detail=f"Proveedor de razonamiento '{proveedor_razon}' no válido. Valores válidos: {PROVEEDORES_VALIDOS}"
         )
 
+    # API keys propias del usuario, guardadas cifradas en su cuenta (/chat
+    # corre siempre en razón, nunca visión). Ver /analizar.
+    api_key_razon_efectiva = resolver_api_key_usuario(
+        proveedor_razon, descifrar_api_keys(usuario.api_keys_cifradas)
+    )
+
     verificar_frecuencia(f"user:{usuario.id}")
-    verificar_presupuesto_tokens(usuario, proveedor)
+    if not api_key_razon_efectiva:
+        verificar_presupuesto_tokens(usuario, proveedor)
 
     if nivel not in NIVEL_A_MODO:
         raise HTTPException(
@@ -775,6 +1006,7 @@ async def chat(
         "mime_type": "",
         "proveedor": proveedor,
         "proveedor_razon": proveedor_razon,
+        "api_key_razon": api_key_razon_efectiva,
         "modo_interaccion": modo,
         "nivel": normalizar_nivel(nivel),
         "historial_chat": historial_list,
@@ -817,11 +1049,13 @@ async def chat(
         #
         # El chat consume tokens en cualquier intención, así que se acumulan al
         # presupuesto del usuario aquí (no solo en la rama de modificación).
+        # Si trajo su propia key, esta llamada no gastó presupuesto del servidor.
         uso_chat = resultado.get("uso", {})
-        registrar_tokens_usuario(
-            usuario, proveedor_razon,
-            uso_chat.get("tokens_entrada", 0) + uso_chat.get("tokens_salida", 0),
-        )
+        if not api_key_razon_efectiva:
+            registrar_tokens_usuario(
+                usuario, proveedor_razon,
+                uso_chat.get("tokens_entrada", 0) + uso_chat.get("tokens_salida", 0),
+            )
 
         if intencion == "responder":
             yield _evento_sse("respuesta", {
@@ -832,7 +1066,8 @@ async def chat(
         else:
             tokens_entrada = resultado.get("uso", {}).get("tokens_entrada", 0)
             tokens_salida = resultado.get("uso", {}).get("tokens_salida", 0)
-            metricas.registrar(tokens_entrada, tokens_salida, proveedor_razon)
+            if not api_key_razon_efectiva:
+                metricas.registrar(tokens_entrada, tokens_salida, proveedor_razon)
 
             yield _evento_sse("actualizado", {
                 "respuesta": resultado.get("respuesta", ""),

@@ -65,6 +65,15 @@ class LoginRequest(BaseModel):
     contrasena: str
 
 
+class ApiKeysConfiguradas(BaseModel):
+    """Flags de "¿hay una key guardada para este proveedor?" — nunca el valor
+    de la key. Es lo único que el front necesita para mostrar "configurada ✓"
+    sin volver a exponer el secreto (ver GRUPOS_CREDENCIAL en catalogo.py)."""
+    openai: bool = False
+    gemini: bool = False
+    nvidia: bool = False
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -73,6 +82,8 @@ class TokenResponse(BaseModel):
     email: str
     nivel: str
     nivel_confirmado: bool
+    foto_perfil: str | None = None
+    api_keys_configuradas: ApiKeysConfiguradas = ApiKeysConfiguradas()
 
 
 class UsuarioResponse(BaseModel):
@@ -81,12 +92,28 @@ class UsuarioResponse(BaseModel):
     email: str
     nivel: str
     nivel_confirmado: bool
+    foto_perfil: str | None = None
+    api_keys_configuradas: ApiKeysConfiguradas = ApiKeysConfiguradas()
 
 
 class PerfilRequest(BaseModel):
-    # Ambos opcionales: se actualiza solo lo que venga. Nombre vacío no se acepta.
+    # Todos opcionales: se actualiza solo lo que venga. Nombre vacío no se acepta.
     nombre: str | None = Field(default=None, min_length=1, max_length=100)
     email: EmailStr | None = None
+    # Preset del carrusel ("/avatares/avatar-3.png") o data URL de una foto
+    # subida ("data:image/jpeg;base64,..."). El límite generoso (~500KB de
+    # texto) cubre una foto de unos 350KB antes de la inflación de base64;
+    # el front ya valida un límite más chico antes de mandarla.
+    foto_perfil: str | None = Field(default=None, max_length=500_000)
+
+
+class ApiKeysRequest(BaseModel):
+    """PATCH /auth/api-keys. Un campo por proveedor real (ver
+    GRUPOS_CREDENCIAL): None = no tocar esa key, "" = borrarla, cualquier otro
+    valor = guardarla (reemplaza la anterior)."""
+    openai: str | None = Field(default=None, max_length=200)
+    gemini: str | None = Field(default=None, max_length=200)
+    nvidia: str | None = Field(default=None, max_length=200)
 
 
 class ContrasenaRequest(BaseModel):

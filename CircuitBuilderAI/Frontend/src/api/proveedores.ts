@@ -21,6 +21,9 @@ export type ModeloProveedor = {
   disponible: boolean
   tipo_facturacion: 'saldo' | 'diario' | 'local' | 'desconocido'
   peticiones_dia: number | null
+  // A qué campo de "API key propia" pertenece este modelo (ver
+  // GrupoCredencial) — null para los locales (Ollama), que no llevan key.
+  grupo_credencial: string | null
 }
 
 export type GrupoProveedores = {
@@ -29,9 +32,18 @@ export type GrupoProveedores = {
   modelos: ModeloProveedor[]
 }
 
+// Un campo de API key propia por proveedor REAL (OpenAI, Gemini, NVIDIA) —
+// no por slot visión/razón. Varios modelos del catálogo pueden compartir el
+// mismo grupo (gemini-flash-lite y gemini-3.5-flash usan la key "gemini").
+export type GrupoCredencial = {
+  id: string
+  etiqueta: string
+}
+
 export type CatalogoProveedores = {
   grupos: GrupoProveedores[]
   por_defecto: string
+  grupos_credencial: GrupoCredencial[]
 }
 
 // Endpoint público (no requiere token): el usuario elige modelo antes de entrar.
