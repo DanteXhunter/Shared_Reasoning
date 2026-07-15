@@ -90,7 +90,6 @@ class MLLMProvider(LLMProvider):
             tokens_esta_llamada = response.usage.total_tokens
             self.tokens_consumidos_sesion += tokens_esta_llamada
             texto_raw = response.choices[0].message.content or ""
-            print(f"RESPUESTA CRUDA DEL MODELO: {texto_raw}")
             texto = texto_raw.strip().replace("```json", "").replace("```", "").strip()
             return {
                 "resultado": json.loads(texto),
