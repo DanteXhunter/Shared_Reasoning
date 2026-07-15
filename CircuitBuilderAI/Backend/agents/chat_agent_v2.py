@@ -179,7 +179,7 @@ async def ejecutar_chat_agent_v2(estado: EstadoGlobal) -> dict:
     # visión (que es para leer la imagen del esquemático). Si no vino
     # especificado, cae al de visión (retrocompatible con sesiones previas).
     proveedor_id = estado.get("proveedor_razon") or estado.get("proveedor", "gpt-4o-mini")
-    proveedor = crear_provider_chat(proveedor_id)
+    proveedor = crear_provider_chat(proveedor_id, estado.get("api_key_razon"))
 
     # ── Clasificar intención ──
     try:

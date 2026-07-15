@@ -7,6 +7,8 @@ import Protoboard from '../components/Protoboard'
 import ComponentGallery from '../components/ComponentGallery'
 import JsonView from '../components/JsonView'
 import ChatPanel, { type Mensaje } from './ChatPanel'
+import { ModalCuenta } from './PanelUsuario'
+import Avatar from './Avatar'
 import TemaProvider from './theme'
 import { LogoWordmark } from './Logo'
 import { layoutDesdeInstrucciones, normalizarTipo, colorCable } from '../circuit/layout'
@@ -15,7 +17,8 @@ import { calcularBandas } from '../circuit/resistorColorCode'
 import { boardSize } from '../circuit/grid'
 import type { Sesion } from './tipos'
 import type { Instruccion, Netlist } from '../circuit/types'
-import { listarSesiones, abrirSesion, type SesionResumen } from '../api/sesiones'
+import { abrirSesion } from '../api/sesiones'
+import { useHistorialSesiones, BuscadorHistorial, ItemHistorial, ToastHistorial } from './HistorialSesiones'
 import type { Usuario } from '../api/auth'
 
 type Props = {
@@ -25,6 +28,8 @@ type Props = {
   // Cambia a otra sesión (ej. abrir un chat del historial).
   onCargarSesion: (s: Sesion) => void
   onCerrarSesion: () => void
+  // Refresca el usuario en App.tsx tras editar perfil/foto/API keys desde Mi cuenta.
+  onActualizarUsuario: (u: Usuario) => void
 }
 
 const NOMBRE_NIVEL: Record<Sesion['nivel'], string> = { basico: 'Básico', intermedio: 'Intermedio', experto: 'Experto' }
@@ -92,8 +97,11 @@ function PanelCodigo({ netlist, instrucciones }: { netlist: Netlist | null; inst
 // top nav con tabs, sidebar de chats, protoboard central, panel de detalle a
 // la derecha (paso, instrucción, componente, coordenadas, lista de componentes)
 // y barra de estadísticas abajo.
-function VistaPrincipal({ sesion, usuario, onNuevo, onCargarSesion, onCerrarSesion }: Props) {
+function VistaPrincipal({
+  sesion, usuario, onNuevo, onCargarSesion, onCerrarSesion, onActualizarUsuario,
+}: Props) {
   const [instrucciones, setInstrucciones] = useState(sesion.instrucciones)
+  const [configuracionAbierta, setConfiguracionAbierta] = useState(false)
   const total = instrucciones.length
   const [paso, setPaso] = useState(1)
   const [revelado, setRevelado] = useState(true)
@@ -115,13 +123,13 @@ function VistaPrincipal({ sesion, usuario, onNuevo, onCargarSesion, onCerrarSesi
     ],
   )
   const [tiempo, setTiempo] = useState(0)
-  const [historialSesiones, setHistorialSesiones] = useState<SesionResumen[]>([])
 
-  // Historial real de sesiones del usuario (#73). Se recarga al cambiar de
-  // sesión para que una recién creada aparezca en la lista.
-  useEffect(() => {
-    listarSesiones().then(setHistorialSesiones).catch(() => setHistorialSesiones([]))
-  }, [sesion.id])
+  // Historial real de sesiones del usuario (#73), con búsqueda, renombrar y
+  // borrar (#88 ampliado). Se recarga al cambiar de sesión para que una
+  // recién creada aparezca en la lista.
+  const {
+    filas: historialSesiones, aviso: avisoHistorial, busqueda: busquedaHistorial, setBusqueda: setBusquedaHistorial, renombrar: renombrarSesionHistorial, borrar: borrarSesionHistorial,
+  } = useHistorialSesiones(sesion.id)
 
   // Abre una sesión del historial (trae netlist, instrucciones y chat de la BD).
   async function abrirDelHistorial(id: string) {
@@ -249,6 +257,7 @@ function VistaPrincipal({ sesion, usuario, onNuevo, onCargarSesion, onCerrarSesi
 
   return (
     <TemaProvider tema="light" className="h-screen overflow-hidden flex flex-col" style={{ color: 'var(--ink)', background: 'var(--bg2)' }}>
+      <ToastHistorial mensaje={avisoHistorial} />
       {/* ============ BARRA SUPERIOR ============ */}
       <header className="h-16 flex items-center gap-4 px-6 shrink-0" style={{ background: 'var(--bg2)', borderBottom: '1px solid var(--border)' }}>
         <button onClick={onNuevo} className="hover:opacity-80 transition" title="Volver a bienvenida">
@@ -271,11 +280,15 @@ function VistaPrincipal({ sesion, usuario, onNuevo, onCargarSesion, onCerrarSesi
         <div className="relative">
           <button
             onClick={() => setMenuUsuarioAbierto((a) => !a)}
-            className="grid place-items-center w-10 h-10 rounded-full hover:brightness-105 transition text-sm font-semibold"
-            style={{ background: 'var(--accent)', color: 'var(--bg2)' }}
+            className="grid place-items-center w-10 h-10 rounded-full hover:brightness-105 transition text-sm font-semibold overflow-hidden"
+            // Sin usuario (fallback al ícono genérico) sí necesita el fondo de
+            // acento; con usuario, Avatar ya pinta su propio círculo (foto o
+            // inicial) — pintar el botón encima haría que el acento se asome
+            // por los márgenes transparentes de las fotos con fondo removido.
+            style={usuario ? undefined : { background: 'var(--accent)', color: 'var(--bg2)' }}
             title="Cuenta"
           >
-            {usuario ? usuario.nombre.charAt(0).toUpperCase() : <User size={20} />}
+            {usuario ? <Avatar usuario={usuario} size={40} /> : <User size={20} />}
           </button>
 
           {menuUsuarioAbierto && (
@@ -291,10 +304,9 @@ function VistaPrincipal({ sesion, usuario, onNuevo, onCargarSesion, onCerrarSesi
                 style={{ background: 'var(--bg2)', border: '1px solid var(--border)' }}
               >
                 <button
-                  disabled
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left opacity-40 cursor-not-allowed"
+                  onClick={() => { setMenuUsuarioAbierto(false); setConfiguracionAbierta(true) }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-black/5 transition"
                   style={{ color: 'var(--ink)' }}
-                  title="Próximamente"
                 >
                   <Settings size={16} />
                   Configuración
@@ -374,25 +386,31 @@ function VistaPrincipal({ sesion, usuario, onNuevo, onCargarSesion, onCerrarSesi
           </div>
 
           {vistaChats === 'historial' ? (
-            /* ---- Historial (misma columna, cascarón issue #88) ---- */
-            <div className="flex-1 min-h-0 overflow-y-auto space-y-1">
-              <button
-                onClick={() => setVistaChats('conversacion')}
-                className="w-full text-left text-sm px-3 py-2 rounded-xl truncate transition"
-                style={{ background: 'var(--accent)', color: 'var(--bg2)' }}
-              >
-                {sesion.nombre}
-              </button>
-              {historialSesiones.filter((c) => c.id !== sesion.id).map((c) => (
+            /* ---- Historial (misma columna), con búsqueda + renombrar/borrar (#88) ---- */
+            <div className="flex-1 min-h-0 flex flex-col gap-2">
+              <BuscadorHistorial value={busquedaHistorial} onChange={setBusquedaHistorial} />
+              <div className="flex-1 min-h-0 overflow-y-auto space-y-1">
                 <button
-                  key={c.id}
-                  onClick={() => abrirDelHistorial(c.id)}
-                  className="w-full text-left text-sm px-3 py-2 rounded-xl truncate transition cursor-pointer hover:[background:color-mix(in_srgb,var(--accent)_15%,transparent)]"
-                  style={{ color: 'var(--ink-soft)' }}
+                  onClick={() => setVistaChats('conversacion')}
+                  className="w-full text-left text-sm px-3 py-2 rounded-xl truncate transition"
+                  style={{ background: 'var(--accent)', color: 'var(--bg2)' }}
                 >
-                  {c.nombre}
+                  {sesion.nombre}
                 </button>
-              ))}
+                {historialSesiones.filter((c) => c.id !== sesion.id).length === 0 && busquedaHistorial.trim() ? (
+                  <span className="block text-xs px-3 py-2" style={{ color: 'var(--ink-soft)' }}>Sin resultados.</span>
+                ) : (
+                  historialSesiones.filter((c) => c.id !== sesion.id).map((c) => (
+                    <ItemHistorial
+                      key={c.id}
+                      fila={c}
+                      onAbrir={() => abrirDelHistorial(c.id)}
+                      onRenombrar={(nombre) => renombrarSesionHistorial(c.id, nombre)}
+                      onBorrar={() => borrarSesionHistorial(c.id)}
+                    />
+                  ))
+                )}
+              </div>
             </div>
           ) : (
             /* ---- Conversación a columna completa ---- */
@@ -606,6 +624,18 @@ function VistaPrincipal({ sesion, usuario, onNuevo, onCargarSesion, onCerrarSesi
             <ComponentGallery componentesSesion={sesion.netlist?.componentes ?? []} />
           </div>
         </div>
+      )}
+
+      {/* Configuración → "Mi cuenta": mismo modal que usa Bienvenida (ver
+          PanelUsuario), para que perfil/contraseña/API keys/foto de perfil
+          sean un único lugar sin importar desde qué pantalla se abra. */}
+      {configuracionAbierta && usuario && (
+        <ModalCuenta
+          usuario={usuario}
+          onActualizar={onActualizarUsuario}
+          onCerrarSesion={onCerrarSesion}
+          onCerrar={() => setConfiguracionAbierta(false)}
+        />
       )}
     </TemaProvider>
   )

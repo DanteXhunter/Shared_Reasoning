@@ -6,6 +6,7 @@ const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 // Envía el netlist al planner y devuelve las instrucciones paso a paso
 // (con coordenadas reales de protoboard). La geometría es determinística en el
 // backend; `nivel` (basico|intermedio|experto) ajusta la verbosidad del texto.
+// Las API keys propias del usuario las resuelve el backend por su cuenta.
 export async function planificarCircuito(
   netlist: Netlist,
   proveedor: string,

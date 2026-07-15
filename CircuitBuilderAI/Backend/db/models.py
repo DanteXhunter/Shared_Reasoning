@@ -21,6 +21,16 @@ class Usuario(Base):
     # Admin/superusuario (investigadores): exento del presupuesto de tokens (#76).
     # Se marca a mano en la base; no hay endpoint para crear admins.
     es_admin = Column(Boolean, nullable=False, default=False)
+    # Preset del carrusel ("/avatares/avatar-3.png") o data URL de una foto
+    # subida por el usuario — incluye el prefijo "data:image/...;base64,"
+    # (mismo patrón que Sesion.imagen_esquema). NULL = sin foto, se muestra la
+    # inicial del nombre.
+    foto_perfil = Column(Text, nullable=True)
+    # Blob cifrado (Fernet) con las API keys propias del usuario, una por
+    # proveedor real — ver providers/cifrado_keys.py. Nunca se guarda en texto
+    # plano ni se devuelve al front; solo se exponen flags booleanos de "está
+    # configurada" (ver auth.ApiKeysConfiguradas).
+    api_keys_cifradas = Column(Text, nullable=True)
     fecha_registro = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -40,6 +50,11 @@ class Sesion(Base):
     netlist = Column(JSONB)
     instrucciones = Column(JSONB)
     historial_chat = Column(JSONB)
+    # Data URL (base64) del esquemático subido, comprimida en el navegador
+    # antes de mandarla (~1200px de lado máximo) — para restaurarlo al
+    # reabrir una sesión desde el historial. Columna ya creada por la
+    # migración a1c3e5f7b9d0; el modelo no la declaraba hasta ahora.
+    imagen_esquema = Column(Text, nullable=True)
     # Modo de interacción predominante de la sesión (resumen calculado a partir
     # de los mensajes). La fuente de verdad por-mensaje vive en ChatMensaje.
     modo_detectado = Column(String(20))
