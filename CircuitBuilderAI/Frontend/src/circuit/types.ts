@@ -16,6 +16,19 @@ export type Componente = {
 
 export type Conexion = { de: string; a: string; descripcion?: string | null }
 
+// Consumo/costo de UNA llamada a un agente (extractor, planner o chat) — lo
+// arma agents/*.py en cada corrida (ver MetricasAgente en agents/estado.py).
+export type Uso = {
+  tokens_entrada?: number
+  tokens_salida?: number
+  tokens_total?: number
+  intentos?: number
+  modelo_activo?: string
+  tiempo_segundos?: number
+  // Solo /chat lo agrega (tiempo total del turno, clasificar + modificar).
+  tiempo_total_segundos?: number
+}
+
 export type Netlist = {
   // Título corto del circuito generado por la IA (ej. "Divisor de voltaje con LED").
   nombre?: string
@@ -28,7 +41,7 @@ export type RespuestaAnalizar = {
   resultado?: Netlist
   error?: boolean
   mensaje?: string
-  uso?: Record<string, unknown>
+  uso?: Uso
   metricas?: Record<string, unknown>
 }
 
@@ -86,7 +99,7 @@ export type RespuestaPlanner = {
   instrucciones?: Instruccion[]
   error?: boolean
   mensaje?: string
-  uso?: Record<string, unknown>
+  uso?: Uso
   metricas?: Record<string, unknown>
 }
 
