@@ -6,6 +6,9 @@ type Props = { onElegir: (nivel: Nivel) => void }
 
 // Descriptores autoreportados concretos (§4.B, §8.B) — no es un cuestionario
 // de verificación, es un prior: el usuario se reconoce en una de las 3.
+// "Intermedio" queda comentado momentáneamente (a pedido de Diego,
+// 2026-07-16) — el tipo Nivel y el resto del backend lo siguen soportando
+// igual, solo no se ofrece en esta encuesta por ahora. Descomentar para restaurarlo.
 const NIVELES: { id: Nivel; titulo: string; descripcion: string }[] = [
   {
     id: 'basico',
@@ -13,12 +16,12 @@ const NIVELES: { id: Nivel; titulo: string; descripcion: string }[] = [
     descripcion:
       'No tienes conocimiento sobre componentes electrónicos y nunca has armado una protoboard. Es tu primera vez y quieres intentarlo.',
   },
-  {
-    id: 'intermedio',
-    titulo: 'Intermedio',
-    descripcion:
-      'Sabes qué es una resistencia, un LED, y has armado una protoboard un par de veces.',
-  },
+  // {
+  //   id: 'intermedio',
+  //   titulo: 'Intermedio',
+  //   descripcion:
+  //     'Sabes qué es una resistencia, un LED, y has armado una protoboard un par de veces.',
+  // },
   {
     id: 'experto',
     titulo: 'Experto',
@@ -42,7 +45,7 @@ function EncuestaNivel({ onElegir }: Props) {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full max-w-5xl">
+        <div className={`grid grid-cols-1 ${NIVELES.length === 3 ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-6 w-full max-w-5xl`}>
           {NIVELES.map((n) => (
             <button
               key={n.id}

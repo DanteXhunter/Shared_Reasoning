@@ -1,4 +1,4 @@
-import type { Instruccion, Netlist } from '../circuit/types'
+import type { Instruccion, Netlist, Uso } from '../circuit/types'
 import { fetchAutenticado } from './auth'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
@@ -7,7 +7,7 @@ export type MensajeHistorial = { rol: 'user' | 'assistant'; contenido: string }
 
 export type EventoChat =
   | { tipo: 'estado'; mensaje: string }
-  | { tipo: 'respuesta'; contenido: string; intencion_detectada: string }
+  | { tipo: 'respuesta'; contenido: string; intencion_detectada: string; uso?: Uso }
   | {
       tipo: 'actualizado'
       respuesta: string
@@ -15,6 +15,7 @@ export type EventoChat =
       instrucciones_actualizadas: Instruccion[] | null
       netlist_modificado: Netlist | null
       posiciones_modificadas: Record<string, number> | null
+      uso?: Uso
     }
   | { tipo: 'error'; mensaje: string }
 

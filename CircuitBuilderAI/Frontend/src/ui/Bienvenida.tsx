@@ -137,6 +137,7 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
         nombre,
         nivel,
         imagenEsquema,
+        metricasProceso: { extractor: analisis.uso, planner: plan.uso },
       })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error desconocido')

@@ -3,7 +3,7 @@ import { ArrowUp } from 'lucide-react'
 import { BlobMascota } from './Logo'
 import { enviarMensajeChat } from '../api/chat'
 import type { MensajeHistorial } from '../api/chat'
-import type { Instruccion, Netlist } from '../circuit/types'
+import type { Instruccion, Netlist, Uso } from '../circuit/types'
 
 export type Mensaje = { de: 'ai' | 'tu'; texto: string }
 
@@ -18,9 +18,11 @@ type Props = {
   proveedorRazon: string
   nivel: string
   onInstruccionesActualizadas: (instrucciones: Instruccion[]) => void
+  // Reporta el consumo de cada turno del chat — ver pestaña "Métricas".
+  onUso?: (uso: Uso, intencion: string) => void
 }
 
-function ChatPanel({ mensajes, onMensajes, sesionId, netlist, instrucciones, proveedor, proveedorRazon, nivel, onInstruccionesActualizadas }: Props) {
+function ChatPanel({ mensajes, onMensajes, sesionId, netlist, instrucciones, proveedor, proveedorRazon, nivel, onInstruccionesActualizadas, onUso }: Props) {
   const [texto, setTexto] = useState('')
   const [cargando, setCargando] = useState(false)
   // Se siembra con los mensajes ya cargados para que el LLM tenga el contexto
@@ -61,6 +63,7 @@ function ChatPanel({ mensajes, onMensajes, sesionId, netlist, instrucciones, pro
           const respuesta: MensajeHistorial = { rol: 'assistant', contenido: evento.contenido }
           setHistorial((h) => [...h, respuesta])
           onMensajes([...mensajes, { de: 'tu', texto: limpio }, { de: 'ai', texto: evento.contenido }])
+          if (evento.uso) onUso?.(evento.uso, evento.intencion_detectada)
         }
 
         if (evento.tipo === 'actualizado') {
@@ -70,10 +73,11 @@ function ChatPanel({ mensajes, onMensajes, sesionId, netlist, instrucciones, pro
           if (evento.instrucciones_actualizadas) {
             onInstruccionesActualizadas(evento.instrucciones_actualizadas)
           }
+          if (evento.uso) onUso?.(evento.uso, evento.intencion_detectada)
         }
 
         if (evento.tipo === 'error') {
-          onMensajes([...mensajes, { de: 'tu', texto: limpio }, { de: 'ai', texto: `⚠️ ${evento.mensaje}` }])
+          onMensajes([...mensajes, { de: 'tu', texto: limpio }, { de: 'ai', texto: evento.mensaje }])
         }
       },
     })
