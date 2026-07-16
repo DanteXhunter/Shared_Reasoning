@@ -85,7 +85,7 @@ Reglas:
 - Los pines deben tener nombres específicos según el componente: base/colector/emisor para transistores, anodo/catodo para diodos y LEDs, plus/minus para fuentes, etc.
 - Los instrumentos de medición (voltímetro, amperímetro, multímetro — círculo con "V" o "A" adentro) SON componentes: inclúyelos con "tipo": "voltimetro" o "amperimetro", con dos pines (plus/minus), igual que cualquier otro componente de 2 patas.
 - No inventes componentes, pines o conexiones que no puedas identificar razonablemente en la imagen. Si un símbolo es ambiguo o ilegible, usa tu mejor interpretación de ingeniería (nunca lo omitas si claramente hay un componente ahí), pero no agregues componentes adicionales "por si acaso" ni conexiones que no tengan un trazo o indicio visual que las respalde.
-- CATÁLOGO DE REFERENCIA (no es una lista cerrada): estos nombres de "tipo" tienen un dibujo detallado en nuestra biblioteca visual — resistencia, led, diodo, transistor, potenciometro, capacitor, capacitor electrolitico, inductor, fusible, cristal, display 7 segmentos, rele, buzzer, voltimetro, motor, circuito integrado, pulsador, fuente, interruptor, foco, fotorresistor. Si el componente que ves coincide con uno de estos, usa EXACTAMENTE ese nombre para que se dibuje con el mejor detalle posible. Pero si el componente real es otra cosa que no está en esta lista, identifícalo con su nombre técnico correcto de todas formas — NUNCA fuerces ni renombres un componente para que encaje en el catálogo solo porque el catálogo existe. Prioriza siempre representar fielmente lo que ves en el esquemático sobre encajar en la lista; un componente sin dibujo detallado se muestra genérico, pero un componente mal identificado rompe el circuito.
+- CATÁLOGO DE REFERENCIA (no es una lista cerrada): estos nombres de "tipo" tienen un dibujo detallado en nuestra biblioteca visual — resistencia, led, diodo, transistor, potenciometro, capacitor, capacitor electrolitico, inductor, fusible, cristal, display 7 segmentos, rele, buzzer, voltimetro, motor, circuito integrado, pulsador, fuente, interruptor, foco, fotorresistor, altavoz, bocina. Si el componente que ves coincide con uno de estos, usa EXACTAMENTE ese nombre para que se dibuje con el mejor detalle posible. Pero si el componente real es otra cosa que no está en esta lista, identifícalo con su nombre técnico correcto de todas formas — NUNCA fuerces ni renombres un componente para que encaje en el catálogo solo porque el catálogo existe. Prioriza siempre representar fielmente lo que ves en el esquemático sobre encajar en la lista; un componente sin dibujo detallado se muestra genérico, pero un componente mal identificado rompe el circuito.
 
 Antes de responder, verifica mentalmente:
 [ ] ¿Incluí la fuente de alimentación como componente?
@@ -108,6 +108,11 @@ class EstadoExtractor(TypedDict):
     exito: bool
     tokens_entrada: int
     tokens_salida: int
+    # Por qué el modelo dejó de generar en el último intento: "stop" = terminó
+    # solo; "length" = lo cortó un límite de tokens (truncamiento real). Sirve
+    # para diagnosticar si un netlist incompleto se debe a truncamiento o a que
+    # el modelo no vio las conexiones.
+    finish_reason: Optional[str]
 
 
 def nodo_analizar(estado: EstadoExtractor) -> dict:
@@ -136,12 +141,14 @@ def nodo_analizar(estado: EstadoExtractor) -> dict:
 
     tokens_entrada = respuesta.usage_metadata.get("input_tokens", 0) if respuesta.usage_metadata else 0
     tokens_salida = respuesta.usage_metadata.get("output_tokens", 0) if respuesta.usage_metadata else 0
+    finish_reason = (respuesta.response_metadata or {}).get("finish_reason")
 
     return {
         "respuesta_raw": respuesta.content,
         "intento": intento + 1,
         "tokens_entrada": estado["tokens_entrada"] + tokens_entrada,
         "tokens_salida": estado["tokens_salida"] + tokens_salida,
+        "finish_reason": finish_reason,
     }
 
 
@@ -153,6 +160,11 @@ TIPOS_FUENTE = {"fuente", "batería", "bateria", "battery", "voltaje", "voltage"
 PINES_POSITIVOS = {"plus", "positivo", "positive", "anodo", "anode", "vcc", "pos"}
 PINES_NEGATIVOS = {"minus", "negativo", "negative", "catodo", "cathode", "gnd",
                    "neg", "tierra", "ground"}
+# Unidades que delatan una fuente de SEÑAL (generador de audio/RF), no de
+# alimentación DC. Un circuito puede tener ambas (ej. un generador de 1MHz +
+# una batería de 9V) — con tipo="fuente" en las dos, no se pueden distinguir
+# por nombre de tipo, solo por la unidad de su "valor".
+UNIDADES_SEÑAL = {"hz", "khz", "mhz", "ghz"}
 
 
 def _normalizar_poder(netlist: dict) -> dict:
@@ -173,10 +185,14 @@ def _normalizar_poder(netlist: dict) -> dict:
     if tiene_vcc and tiene_gnd:
         return netlist
 
-    # Intentar conectar la fuente ya existente en el netlist
+    # Intentar conectar la fuente ya existente en el netlist. Si hay varias
+    # candidatas (ej. un generador de señal Y una batería, ambos tipo="fuente"),
+    # NO tomar la primera a ciegas — preferir la que NO tenga unidad de señal
+    # (Hz/kHz/MHz): esa es la alimentación real, no el generador de entrada.
+    candidatas = [c for c in componentes if any(k in c.get("tipo", "").lower() for k in TIPOS_FUENTE)]
     fuente = next(
-        (c for c in componentes if any(k in c.get("tipo", "").lower() for k in TIPOS_FUENTE)),
-        None,
+        (c for c in candidatas if c.get("unidad", "").strip().lower() not in UNIDADES_SEÑAL),
+        candidatas[0] if candidatas else None,
     )
 
     if fuente:
@@ -337,6 +353,7 @@ async def ejecutar_extractor(
         "exito": False,
         "tokens_entrada": 0,
         "tokens_salida": 0,
+        "finish_reason": None,
     }
 
     grafo = crear_grafo_extractor()
@@ -392,6 +409,7 @@ async def ejecutar_extractor(
                 "intentos": estado_final["intento"],
                 "modelo_activo": modelo_activo,
                 "tiempo_segundos": tiempo_total,
+                "finish_reason": estado_final.get("finish_reason"),
             },
         }
     else:
@@ -406,5 +424,6 @@ async def ejecutar_extractor(
                 "intentos": estado_final["intento"],
                 "modelo_activo": modelo_activo,
                 "tiempo_segundos": tiempo_total,
+                "finish_reason": estado_final.get("finish_reason"),
             },
         }
