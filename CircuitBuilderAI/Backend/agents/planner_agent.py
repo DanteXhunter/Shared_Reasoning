@@ -1,6 +1,7 @@
 from langgraph.graph import StateGraph, END
 from openai import RateLimitError, APIError
 from agents.estado import EstadoGlobal
+from agents.topologia import construir_nets, es_fuente
 from agents.validador import validar_instrucciones
 from agents.verbosidad import reglas_nivel, normalizar_nivel
 from providers.catalogo import (
@@ -47,6 +48,18 @@ PROMPT_PLANIFICAR = """Eres un experto armando circuitos en una protoboard (brea
 NETLIST DEL CIRCUITO (arma EXACTAMENTE estas conexiones, ni más ni menos):
 {netlist}
 
+NODOS ELÉCTRICOS DEL CIRCUITO (ya agrupados a partir del netlist — la MISMA verdad eléctrica contra la que se validará tu propuesta):
+{nodos_electricos}
+
+Usa estos nodos como tu punto de partida — no re-deduzcas la topología desde las conexiones sueltas del netlist. La regla es simple:
+- TODOS los pines listados en un mismo NODO deben terminar eléctricamente unidos (mismo strip, o cables entre sus huecos, o ambos en el mismo riel).
+- Pines de NODOS distintos NUNCA pueden compartir strip ni riel.
+- Un nodo marcado "positivo" debe llegar al riel '+'; uno marcado "negativo", al riel '-'.
+- CADA COMPONENTE OCUPA SU PROPIO HUECO: dos componentes DISTINTOS nunca pueden tener una pata en la MISMA fila+columna exacta — eso es físicamente imposible (un hueco es para una sola pata). Cuando varios componentes comparten nodo, únelos de una de estas dos formas, NUNCA reusando la misma coordenada: (a) cada uno en una columna DIFERENTE del mismo strip (ej. fila 2: uno en 'a', otro en 'b', otro en 'c'), o (b) cada uno en su propia fila, conectados entre sí con cables.
+
+SUGERENCIA DE DISTRIBUCIÓN BASE (punto de partida ordenado — puedes ajustarlo si tu razonamiento eléctrico lo amerita, pero evita amontonar varios componentes en las mismas filas):
+{distribucion_base}
+
 {restriccion_usuario}NIVEL DEL USUARIO (ajusta CUÁNTO explicas en la 'descripcion' de cada paso — la geometría no cambia por esto):
 {reglas_nivel}
 
@@ -57,19 +70,6 @@ Estructura requerida:
     "pasos": [
         {{
             "numero": 1,
-            "tipo": "colocar_componente",
-            "componente_id": "BAT1",
-            "componente_tipo": "fuente",
-            "componente_valor": "9V",
-            "descripcion": "Instrucción en lenguaje natural clara para el usuario",
-            "pines": [
-                {{"nombre": "plus", "fila": 1, "columna": "+"}},
-                {{"nombre": "minus", "fila": 1, "columna": "-"}}
-            ],
-            "cable": null
-        }},
-        {{
-            "numero": 2,
             "tipo": "colocar_componente",
             "componente_id": "R1",
             "componente_tipo": "resistencia",
@@ -82,21 +82,7 @@ Estructura requerida:
             "cable": null
         }},
         {{
-            "numero": 3,
-            "tipo": "conectar_cable",
-            "componente_id": null,
-            "componente_tipo": null,
-            "componente_valor": null,
-            "descripcion": "Instrucción en lenguaje natural clara para el usuario",
-            "pines": null,
-            "cable": {{
-                "color": "rojo",
-                "desde": {{"fila": 5, "columna": "a"}},
-                "hasta": {{"fila": 1, "columna": "+"}}
-            }}
-        }},
-        {{
-            "numero": 4,
+            "numero": 2,
             "tipo": "colocar_componente",
             "componente_id": "LED1",
             "componente_tipo": "led",
@@ -109,7 +95,7 @@ Estructura requerida:
             "cable": null
         }},
         {{
-            "numero": 5,
+            "numero": 3,
             "tipo": "conectar_cable",
             "componente_id": null,
             "componente_tipo": null,
@@ -123,7 +109,21 @@ Estructura requerida:
             }}
         }},
         {{
-            "numero": 6,
+            "numero": 4,
+            "tipo": "conectar_cable",
+            "componente_id": null,
+            "componente_tipo": null,
+            "componente_valor": null,
+            "descripcion": "Instrucción en lenguaje natural clara para el usuario",
+            "pines": null,
+            "cable": {{
+                "color": "rojo",
+                "desde": {{"fila": 5, "columna": "a"}},
+                "hasta": {{"fila": 1, "columna": "+"}}
+            }}
+        }},
+        {{
+            "numero": 5,
             "tipo": "conectar_cable",
             "componente_id": null,
             "componente_tipo": null,
@@ -135,11 +135,24 @@ Estructura requerida:
                 "desde": {{"fila": 8, "columna": "f"}},
                 "hasta": {{"fila": 1, "columna": "-"}}
             }}
+        }},
+        {{
+            "numero": 6,
+            "tipo": "colocar_componente",
+            "componente_id": "BAT1",
+            "componente_tipo": "fuente",
+            "componente_valor": "9V",
+            "descripcion": "Con todo el circuito ya armado y cableado, conecta por último la fuente: pin positivo en el riel '+' y pin negativo en el riel '-'. Así verificas el armado completo ANTES de energizarlo.",
+            "pines": [
+                {{"nombre": "plus", "fila": 1, "columna": "+"}},
+                {{"nombre": "minus", "fila": 1, "columna": "-"}}
+            ],
+            "cable": null
         }}
     ]
 }}
 
-El ejemplo anterior ilustra el caso MÁS COMÚN: dos componentes DISTINTOS que comparten un nodo (R1 en serie con LED1). Cuando eso pase en tu netlist, tienes dos opciones válidas — (a) ponlos en filas donde sus pines caigan en el MISMO strip (mismo número de fila, mismo lado a-e o f-j), o (b) ponlos en filas distintas y agrega un cable entre sus huecos. Usa la que te dé un armado más ordenado. NO dejes esa conexión sin traducir a ninguna de las dos formas — es el error más común.
+El ejemplo anterior ilustra dos cosas: (1) el caso MÁS COMÚN — dos componentes DISTINTOS que comparten un nodo (R1 en serie con LED1). Cuando eso pase en tu netlist, tienes dos opciones válidas — (a) ponlos en filas donde sus pines caigan en el MISMO strip (mismo número de fila, mismo lado a-e o f-j), o (b) ponlos en filas distintas y agrega un cable entre sus huecos. Usa la que te dé un armado más ordenado. NO dejes esa conexión sin traducir a ninguna de las dos formas — es el error más común. (2) La FUENTE (batería) es el ÚLTIMO paso, no el primero — ver regla de seguridad abajo.
 
 Ejemplo adicional — componente de 3 patas (transistor Q1, base/colector/emisor):
 {{
@@ -162,17 +175,67 @@ Reglas de salida:
 - Un paso "colocar_componente" por CADA componente del netlist, incluida la fuente (su pin positivo en columna "+", su pin negativo en columna "-").
 - Un paso "conectar_cable" por cada cable que haga falta para que TODAS las conexiones del netlist queden completas — no dejes ninguna conexión sin traducir a strip compartido o cable.
 - Colores de cable: rojo para el positivo/VCC, negro para negativo/GND, cualquier otro color (verde, azul, amarillo) para señal entre componentes.
-- Primero coloca todos los componentes, luego conecta los cables.
+- ORDEN DE LOS PASOS (regla de seguridad): coloca primero TODOS los componentes que NO sean la fuente, luego conecta TODOS los cables (incluidos los que llegan al riel '+'/'-' — el riel existe como strip físico aunque la fuente todavía no esté puesta), y coloca la FUENTE (batería) en el ÚLTIMO paso de todos. Así el usuario arma y verifica el circuito completo ANTES de energizarlo — conectar la alimentación al final reduce el riesgo de que un error de armado a medio construir cause un corto con la fuente ya puesta.
 - La descripción debe adaptarse al nivel del usuario indicado.
 - "Arma EXACTAMENTE estas conexiones" se refiere a la TOPOLOGÍA ELÉCTRICA (qué nodos quedan unidos entre sí), no a la geometría: la fila y columna exactas de cada componente son tu libre elección, siempre que respetes las reglas físicas.
 
 Antes de responder, verifica mentalmente:
 [ ] ¿Cada componente tiene un paso "colocar_componente" con TODAS sus patas?
 [ ] ¿La fuente (si existe) tiene sus 2 pines en columna '+' y '-', nunca en a-e/f-j?
+[ ] ¿El paso de colocar la FUENTE es el ÚLTIMO de toda la lista (después de todos los demás componentes y cables)?
 [ ] Para cada conexión del netlist entre dos pines de componentes DISTINTOS: ¿quedó resuelta por strip compartido O por un cable explícito? (repasa una por una, no asumas)
 [ ] ¿Ningún par de pines que deben quedar SEPARADOS terminó en el mismo strip por accidente?
 [ ] ¿Usé colores de cable según la convención (rojo=VCC, negro=GND, otro=señal)?
 """
+
+
+def serializar_nets(netlist: dict) -> str:
+    """
+    Convierte los nodos eléctricos de construir_nets() en texto legible para
+    el prompt del planner. Es la MISMA fuente que usa el validador — así la IA
+    razona desde los grupos ya resueltos (el cimiento del armado) en vez de
+    re-deducir la topología del netlist plano, que era su error más común.
+    """
+    nets, _ = construir_nets(netlist)
+    etiquetas = {
+        "positivo": "positivo — debe llegar al riel '+'",
+        "negativo": "negativo — debe llegar al riel '-'",
+    }
+    lineas = []
+    for i, net in enumerate(nets, 1):
+        etiqueta = etiquetas.get(net["tipo"], "señal")
+        pines = ", ".join(f"{cid}.{pin}" for cid, pin in net["pines"])
+        alias = f" (alias en el netlist: {', '.join(net['nodos'])})" if net["nodos"] else ""
+        lineas.append(f"- NODO {i} ({etiqueta}): {pines}{alias}")
+    return "\n".join(lineas)
+
+
+def sugerir_distribucion_base(netlist: dict) -> str:
+    """
+    Sugiere una fila DEDICADA por componente (la fuente queda fuera — va a los
+    rieles, no a un strip), en el orden del netlist. Es solo un punto de
+    partida ordenado para reducir el riesgo de que el modelo intente ahorrarse
+    huecos reusando la misma coordenada para componentes distintos (causa real
+    observada: varias patas de componentes diferentes apiladas en un solo
+    hueco). El LLM sigue libre de ajustar esto si el circuito lo amerita.
+    """
+    lineas = []
+    fila = 2
+    for c in netlist.get("componentes", []):
+        if es_fuente(c):
+            continue
+        pines = c.get("pines", [])
+        n = len(pines)
+        if n <= 0:
+            continue
+        if n <= 2:
+            lineas.append(f"- {c['id']}: fila {fila} (una pata en columna 'a', la otra en 'f')")
+            fila += 1
+        else:
+            filas_usadas = ", ".join(str(fila + i) for i in range(n))
+            lineas.append(f"- {c['id']}: filas {filas_usadas} (una pata por fila, todas en columna 'a')")
+            fila += n
+    return "\n".join(lineas) if lineas else "(sin componentes de strip — solo fuente)"
 
 
 def nodo_planificar(estado: EstadoGlobal) -> dict:
@@ -208,6 +271,8 @@ def nodo_planificar(estado: EstadoGlobal) -> dict:
     prompt = PROMPT_PLANIFICAR.format(
         reglas_fisicas=REGLAS_FISICAS,
         netlist=json.dumps(netlist, ensure_ascii=False, indent=2),
+        nodos_electricos=serializar_nets(netlist),
+        distribucion_base=sugerir_distribucion_base(netlist),
         restriccion_usuario=restriccion_usuario,
         reglas_nivel=reglas_nivel_texto,
         errores_previos=errores_previos,
