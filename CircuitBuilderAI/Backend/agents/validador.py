@@ -57,6 +57,14 @@ def validar_instrucciones(netlist: dict, instrucciones: list[dict]) -> list[str]
 
     parent: dict = {}
     pin_a_hueco: dict = {}
+    # Hueco físico EXACTO (fila, columna) -> qué componentes ya lo ocupan. Los
+    # rieles ('+'/'-') se excluyen a propósito: en la vida real recorren toda
+    # la placa y decenas de componentes distintos se conectan a ellos sin que
+    # eso sea un choque físico. Un strip normal (a-e / f-j), en cambio, es UN
+    # hueco por combinación fila+columna — dos componentes DISTINTOS no caben
+    # ahí a la vez, aunque electricamente "sean el mismo nodo" (eso solo dice
+    # que deben compartir STRIP, no el mismo hueco individual).
+    ocupantes_hueco: dict = {}
 
     for ins in instrucciones:
         if ins.get("tipo") == "colocar_componente" and ins.get("pines"):
@@ -76,6 +84,19 @@ def validar_instrucciones(netlist: dict, instrucciones: list[dict]) -> list[str]
                     continue
                 pin_a_hueco[(cid, nombre)] = clave
                 _dsu_find(parent, clave)
+
+                if str(col).strip().lower() not in ("+", "-"):
+                    hueco_exacto = (fila, str(col).strip().lower())
+                    ocupante_previo = ocupantes_hueco.get(hueco_exacto)
+                    if ocupante_previo is not None and ocupante_previo[0] != cid:
+                        errores.append(
+                            f"Colisión física: {ocupante_previo[0]}.{ocupante_previo[1]} y {cid}.{nombre} "
+                            f"quedaron en el MISMO hueco (fila {fila}, columna '{col}') — dos componentes "
+                            f"distintos no caben en un solo hueco. Si deben compartir nodo, usa columnas "
+                            f"DIFERENTES del mismo strip (ej. una en 'a', otra en 'b') o conéctalos con un cable."
+                        )
+                    else:
+                        ocupantes_hueco[hueco_exacto] = (cid, nombre)
 
         elif ins.get("tipo") == "conectar_cable" and ins.get("cable"):
             cab = ins["cable"]

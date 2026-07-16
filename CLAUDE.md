@@ -22,7 +22,7 @@
 - **Desarrollador:** Cristopher Rojas (GitHub: DanteXhunter) — estudiante de CS en estancia de verano, Programa Delfín.
 - **Institución anfitriona:** Universidad EAFIT, Medellín, Colombia.
 - **Compañero frontend:** Diego Rojas (GitHub: DiegoRojas8509).
-- **Duración:** 6 semanas. Al momento de este archivo estamos en **semana 4**.
+- **Duración:** 6 semanas. Al momento de este archivo estamos en **semana 6** (última — perfeccionando el armado de la protoboard).
 - **Contactos EAFIT:** dospinap@eafit.edu.co · yejaramilm@eafit.edu.co
 
 ---
@@ -284,12 +284,12 @@ que el chat no vuelve a invocar ese camino cuando el pedido es abierto.
 
 - **Clasificador de intención a temperature=0:** para consistencia en la categorización — `responder`, `modificar_netlist`, `modificar_posiciones`.
 - **Modificar posición ≠ modificar netlist:** mover un componente físicamente no cambia la topología eléctrica. El netlist queda intacto; solo se recalculan coordenadas y cables con override.
-- **Override de posición:** el LLM extrae `{componente_id, fila_nueva}` del mensaje del usuario. El algoritmo determinista aplica ese override — no el LLM. Esto mantiene la garantía física del protoboard.
+- **Override de posición:** el LLM extrae `{componente_id, fila_nueva}` del mensaje. Ese override se le pasa al **planner como restricción a respetar** (no lo aplica un algoritmo fijo — ver corrección en §9); si no es eléctricamente posible, el planner explica y usa la alternativa más cercana, y `validador.py` garantiza la física.
 - **Validación de colisiones pendiente:** el sistema no verifica aún si dos componentes colisionan en la misma fila al aplicar un override. Deuda técnica conocida.
 - **`chat_agent_v2.py` en vez de modificar `chat_agent.py`:** el #66 ya estaba mergeado. Tocar ese archivo en otra rama genera conflictos innecesarios.
 - **Se accede a `proveedor.client` directamente:** el método `chat()` del provider no soporta system prompt ni contexto de circuito. Evita modificar la interfaz base que comparten todos los providers.
 
-### 🔴 Bug activo — pedidos ABIERTOS de rearmado no regeneran nada (próximo a implementar: Diego)
+### 🔴 Bug activo — pedidos ABIERTOS de rearmado no regeneran nada (en implementación: Diego — rama `feat/planner-scaffold-netgraph`)
 
 **Síntoma:** el usuario pide algo como *"propón otro armado"* o *"arma diferente"* SIN
 dar números concretos (a diferencia de *"mueve R1 a la fila 10"*, que sí funciona). El
@@ -314,7 +314,7 @@ front.
    front, así que `ChatPanel.onInstruccionesActualizadas` nunca se dispara y el
    protoboard/pasos se quedan exactamente como estaban.
 
-**Direcciones de arreglo a evaluar (sin decidir todavía — Diego decide):**
+**Direcciones evaluadas (decisión tomada abajo):**
 - **(a)** Cuando `overrides` viene vacío pero la intención es `modificar_posiciones`,
   en vez de caer a "responder", volver a llamar al planner pidiéndole una
   distribución **alternativa** (pasarle las instrucciones anteriores como contexto de
@@ -326,6 +326,20 @@ front.
 - Cualquiera de las dos debe seguir devolviendo `instrucciones_actualizadas` en la
   respuesta — ese contrato ya funciona bien hoy para `modificar_netlist` y
   `modificar_posiciones` con números explícitos, no hay que tocarlo.
+
+**✅ Decisión (2026-07-15, Diego — rama `feat/planner-scaffold-netgraph`): opción (b) + refinamiento net-graph.**
+- Se agrega la intención **`proponer_alternativa`**, separada de `modificar_posiciones`,
+  para que el clasificador distinga "mueve R1 a la fila 10" (override numérico) de
+  "arma diferente / propón otro armado" (distribución alternativa). Evita sobrecargar el
+  extractor de overrides numéricos con un caso que no es el suyo.
+- **Refinamiento (idea de Diego):** el planner recibirá el **net-graph explícito** de
+  `agents/topologia.construir_nets()` (los nodos eléctricos ya agrupados) como base de
+  razonamiento, en vez de re-deducir la topología desde el netlist plano. Hoy ese grafo
+  solo se usa como juez en `validador.py`; pasarlo TAMBIÉN al planner lo vuelve el
+  cimiento del armado (menos errores) y el mismo grafo persistente sirve para validar
+  propuestas del usuario ("¿esto es eléctricamente posible?") sin recalcularlo.
+- La ruta nueva respeta el contrato existente: devuelve `instrucciones_actualizadas`
+  para que el front actualice canvas y pasos.
 
 **Cómo reproducirlo:** subir cualquier esquemático, dejar que arme normal, y en el chat
 escribir *"propón otro armado y renderiza los pasos"* (sin mencionar filas). Comparar
