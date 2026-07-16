@@ -22,9 +22,9 @@ export function sesionSensorLuz(): Sesion {
       { de: 'tu', texto: 'Quiero armar un sensor de luz nocturna que encienda un LED cuando oscurece.' },
       { de: 'ai', texto: '¡Perfecto! Analicé tu esquemático y preparé 14 pasos. La idea: el LDR y R1 forman un divisor de voltaje; cuando oscurece, la resistencia del LDR sube, el nodo del divisor cambia y el transistor Q1 deja pasar corriente para encender el LED. Empieza con el paso 1 →' },
       { de: 'tu', texto: '¿Por qué el LED lleva una resistencia de 220 Ω en serie?' },
-      { de: 'ai', texto: 'Buena pregunta 👀 — el LED no limita su propia corriente: si lo conectas directo a 9V se quema. R3 (220 Ω) limita la corriente a unos 15–20 mA, el rango seguro. Es la típica «resistencia limitadora» que verás junto a casi cualquier LED.' },
+      { de: 'ai', texto: 'Buena pregunta — el LED no limita su propia corriente: si lo conectas directo a 9V se quema. R3 (220 Ω) limita la corriente a unos 15–20 mA, el rango seguro. Es la típica «resistencia limitadora» que verás junto a casi cualquier LED.' },
       { de: 'tu', texto: '¿No sería mejor poner el LDR abajo y la resistencia arriba?' },
-      { de: 'ai', texto: 'Se puede — e invertiría la lógica: con el LDR abajo, el LED encendería con LUZ en vez de con oscuridad (un «sensor de día»). Para tu objetivo de lámpara nocturna, el LDR va arriba como está en el plan. Si quieres probar la variante, te regenero los pasos desde el checkpoint actual. 😉' },
+      { de: 'ai', texto: 'Se puede — e invertiría la lógica: con el LDR abajo, el LED encendería con LUZ en vez de con oscuridad (un «sensor de día»). Para tu objetivo de lámpara nocturna, el LDR va arriba como está en el plan. Si quieres probar la variante, te regenero los pasos desde el checkpoint actual.' },
     ],
   }
 }

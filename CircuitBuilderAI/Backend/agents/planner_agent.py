@@ -60,7 +60,7 @@ Usa estos nodos como tu punto de partida — no re-deduzcas la topología desde 
 SUGERENCIA DE DISTRIBUCIÓN BASE (punto de partida ordenado — puedes ajustarlo si tu razonamiento eléctrico lo amerita, pero evita amontonar varios componentes en las mismas filas):
 {distribucion_base}
 
-{restriccion_usuario}NIVEL DEL USUARIO (ajusta CUÁNTO explicas en la 'descripcion' de cada paso — la geometría no cambia por esto):
+{peticion_alternativa}{restriccion_usuario}NIVEL DEL USUARIO (ajusta CUÁNTO explicas en la 'descripcion' de cada paso — la geometría no cambia por esto):
 {reglas_nivel}
 
 {errores_previos}Genera las instrucciones de armado. Responde ÚNICAMENTE con un JSON válido, sin texto adicional, sin bloques de código markdown.
@@ -238,6 +238,23 @@ def sugerir_distribucion_base(netlist: dict) -> str:
     return "\n".join(lineas) if lineas else "(sin componentes de strip — solo fuente)"
 
 
+def serializar_layout_previo(instrucciones: list[dict]) -> str:
+    """
+    Resume una lista de instrucciones YA generada (solo los pasos
+    'colocar_componente') a texto compacto, para el pedido abierto "arma
+    diferente" (intención proponer_alternativa en chat_agent_v2.py). El
+    planner la usa como "esto NO lo repitas" — la topología eléctrica sigue
+    intacta, solo cambia qué fila/columna ocupa cada componente.
+    """
+    lineas = []
+    for paso in instrucciones or []:
+        if paso.get("tipo") != "colocar_componente" or not paso.get("pines"):
+            continue
+        pines = ", ".join(f"{p['nombre']}={p['fila']}{p['columna']}" for p in paso["pines"])
+        lineas.append(f"- {paso.get('componente_id')}: {pines}")
+    return "\n".join(lineas) if lineas else "(sin distribución previa registrada)"
+
+
 def nodo_planificar(estado: EstadoGlobal) -> dict:
     inicio = time.time()
     # Mismo criterio que ejecutar_planner: el planner usa el modelo de
@@ -264,15 +281,39 @@ def nodo_planificar(estado: EstadoGlobal) -> dict:
             f"conflicto, explícalo brevemente en la descripción del paso y usa la alternativa más cercana que sí funcione):\n{lineas}\n\n"
         )
 
+    # Pedido de reubicación SIN fila exacta (ej. "mueve R4 a la derecha", "dale
+    # más espacio al jumper") — el usuario nombró un componente concreto pero
+    # no un número, así que se le pasa en sus propias palabras: el LLM debe
+    # identificar a qué componente(s) se refiere y ajustar solo lo necesario,
+    # dejando el resto de la distribución igual si es razonable.
+    restriccion_libre = estado.get("planner_restriccion_libre")
+    if restriccion_libre:
+        restriccion_usuario += (
+            "PETICIÓN ADICIONAL DEL USUARIO, EN SUS PROPIAS PALABRAS (no dio fila exacta — "
+            "identifica tú el componente y aplica un ajuste razonable; respétala si es "
+            f"eléctricamente posible):\n{restriccion_libre}\n\n"
+        )
+
     errores_previos = ""
     if intento > 0 and errores:
         errores_previos = f"ERRORES DE TU PROPUESTA ANTERIOR QUE DEBES CORREGIR:\n{errores[-1]}\n\n"
+
+    layout_previo = estado.get("planner_layout_previo")
+    peticion_alternativa = ""
+    if layout_previo:
+        peticion_alternativa = (
+            "EL USUARIO PIDIÓ UNA DISTRIBUCIÓN DIFERENTE A LA ACTUAL (la topología "
+            "eléctrica NO cambia, solo la geometría). Esta fue la distribución "
+            "anterior — NO la repitas, cambia la fila y/o columna de al menos varios "
+            f"componentes:\n{serializar_layout_previo(layout_previo)}\n\n"
+        )
 
     prompt = PROMPT_PLANIFICAR.format(
         reglas_fisicas=REGLAS_FISICAS,
         netlist=json.dumps(netlist, ensure_ascii=False, indent=2),
         nodos_electricos=serializar_nets(netlist),
         distribucion_base=sugerir_distribucion_base(netlist),
+        peticion_alternativa=peticion_alternativa,
         restriccion_usuario=restriccion_usuario,
         reglas_nivel=reglas_nivel_texto,
         errores_previos=errores_previos,

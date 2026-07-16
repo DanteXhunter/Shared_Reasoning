@@ -16,7 +16,7 @@ import MiniComponente, { MiniCable } from '../components/MiniComponente'
 import { calcularBandas } from '../circuit/resistorColorCode'
 import { boardSize } from '../circuit/grid'
 import type { Sesion } from './tipos'
-import type { Instruccion, Netlist } from '../circuit/types'
+import type { Instruccion, Netlist, Uso } from '../circuit/types'
 import { abrirSesion } from '../api/sesiones'
 import { useHistorialSesiones, BuscadorHistorial, ItemHistorial, ToastHistorial } from './HistorialSesiones'
 import type { Usuario } from '../api/auth'
@@ -93,6 +93,145 @@ function PanelCodigo({ netlist, instrucciones }: { netlist: Netlist | null; inst
   )
 }
 
+// ---- Pestaña "Métricas" ----
+// Traduce a texto legible cada intención de chat que ya devuelve el backend
+// (agents/chat_agent_v2.py) — solo etiquetas, la clasificación real la hace el LLM.
+const ETIQUETA_INTENCION: Record<string, string> = {
+  responder: 'Pregunta',
+  modificar_netlist: 'Netlist',
+  modificar_posiciones: 'Posición',
+  proponer_alternativa: 'Alternativa',
+}
+
+function formatNum(n?: number): string {
+  return typeof n === 'number' ? n.toLocaleString('es-MX') : '—'
+}
+
+function formatSeg(s?: number): string {
+  return typeof s === 'number' ? `${s.toFixed(1)}s` : '—'
+}
+
+function TarjetaResumen({ titulo, valor }: { titulo: string; valor: string }) {
+  return (
+    <div className="rounded-xl p-4 flex flex-col gap-1" style={{ background: 'var(--bg2)', border: '1px solid var(--border)' }}>
+      <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--ink-soft)' }}>{titulo}</span>
+      <span className="text-2xl font-bold">{valor}</span>
+    </div>
+  )
+}
+
+// Una tarjeta por agente (Extractor/Planner) con su consumo real de esa corrida.
+// El nombre del modelo va como texto plano bajo el título (no como badge/pill)
+// porque "gemini-flash-lite-latest" no cabe en una píldora sin partirse en
+// 2-3 líneas feas — como texto normal simplemente hace wrap limpio.
+function TarjetaAgente({ etiqueta, uso }: { etiqueta: string; uso?: Uso }) {
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+      <div className="px-4 py-2 flex flex-col gap-0.5" style={{ background: 'var(--bg2)', borderBottom: '1px solid var(--border)' }}>
+        <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--ink-soft)' }}>{etiqueta}</span>
+        {uso && (
+          <span className="text-xs font-mono break-all" style={{ color: 'var(--ink)' }}>{uso.modelo_activo ?? '—'}</span>
+        )}
+      </div>
+      {uso ? (
+        <div className="flex flex-col gap-3 p-4" style={{ background: 'var(--bg1)' }}>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <span className="block text-xs" style={{ color: 'var(--ink-soft)' }}>Entrada</span>
+              <span className="text-lg font-semibold">{formatNum(uso.tokens_entrada)}</span>
+            </div>
+            <div>
+              <span className="block text-xs" style={{ color: 'var(--ink-soft)' }}>Salida</span>
+              <span className="text-lg font-semibold">{formatNum(uso.tokens_salida)}</span>
+            </div>
+            <div>
+              <span className="block text-xs" style={{ color: 'var(--ink-soft)' }}>Total</span>
+              <span className="text-lg font-semibold" style={{ color: 'var(--accent)' }}>{formatNum(uso.tokens_total)}</span>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3 pt-3" style={{ borderTop: '1px solid var(--border)' }}>
+            <div>
+              <span className="block text-xs" style={{ color: 'var(--ink-soft)' }}>Tiempo</span>
+              <span className="text-lg font-semibold">{formatSeg(uso.tiempo_segundos)}</span>
+            </div>
+            <div>
+              <span className="block text-xs" style={{ color: 'var(--ink-soft)' }}>Intentos</span>
+              <span className="text-lg font-semibold">{uso.intentos ?? '—'}</span>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <p className="text-sm p-4" style={{ background: 'var(--bg1)', color: 'var(--ink-soft)' }}>Sin datos (sesión de ejemplo).</p>
+      )}
+    </div>
+  )
+}
+
+// Consumo real reportado por el backend en cada llamada (agents/estado.py
+// MetricasAgente) — no se inventa nada aquí, solo se muestra bonito. La corrida
+// inicial viene de Bienvenida.tsx; cada turno del chat se acumula en vivo.
+function PanelMetricas({ metricasProceso, usoChat }: { metricasProceso?: Sesion['metricasProceso']; usoChat: { uso: Uso; intencion: string }[] }) {
+  const extractor = metricasProceso?.extractor
+  const planner = metricasProceso?.planner
+  const todos = [extractor, planner, ...usoChat.map((u) => u.uso)].filter((u): u is Uso => Boolean(u))
+  const totalTokens = todos.reduce((acc, u) => acc + (u.tokens_total ?? 0), 0)
+  const totalTiempo = todos.reduce((acc, u) => acc + (u.tiempo_segundos ?? 0), 0)
+
+  if (todos.length === 0) {
+    return (
+      <div className="absolute inset-0 grid place-items-center">
+        <span className="text-sm" style={{ color: 'var(--ink-soft)' }}>Sin métricas para esta sesión (ejemplo o cargada sin análisis).</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="absolute inset-0 overflow-y-auto p-5 flex flex-col gap-5">
+      <div className="grid grid-cols-3 gap-3">
+        <TarjetaResumen titulo="Tokens totales" valor={formatNum(totalTokens)} />
+        <TarjetaResumen titulo="Tiempo acumulado" valor={formatSeg(totalTiempo)} />
+        <TarjetaResumen titulo="Llamadas al modelo" valor={String(todos.length)} />
+      </div>
+
+      <div>
+        <h3 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: 'var(--ink-soft)' }}>Análisis inicial</h3>
+        <div className="grid grid-cols-2 gap-3">
+          <TarjetaAgente etiqueta="Extractor (visión)" uso={extractor} />
+          <TarjetaAgente etiqueta="Planner (razón)" uso={planner} />
+        </div>
+      </div>
+
+      {usoChat.length > 0 && (
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: 'var(--ink-soft)' }}>Interacciones del chat</h3>
+          <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+            <table className="w-full text-sm">
+              <thead>
+                <tr style={{ background: 'var(--bg2)' }}>
+                  <th className="text-left font-semibold px-3 py-2" style={{ color: 'var(--ink-soft)' }}>Intención</th>
+                  <th className="text-left font-semibold px-3 py-2" style={{ color: 'var(--ink-soft)' }}>Modelo</th>
+                  <th className="text-right font-semibold px-3 py-2" style={{ color: 'var(--ink-soft)' }}>Tokens</th>
+                  <th className="text-right font-semibold px-3 py-2" style={{ color: 'var(--ink-soft)' }}>Tiempo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {usoChat.map(({ uso, intencion }, i) => (
+                  <tr key={i} style={{ borderTop: '1px solid var(--border)', background: 'var(--bg1)' }}>
+                    <td className="px-3 py-2">{ETIQUETA_INTENCION[intencion] ?? intencion}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{uso.modelo_activo ?? '—'}</td>
+                    <td className="px-3 py-2 text-right">{formatNum(uso.tokens_total)}</td>
+                    <td className="px-3 py-2 text-right">{formatSeg(uso.tiempo_total_segundos ?? uso.tiempo_segundos)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Vista principal "Paralelo" — layout tomado del mockup de diseño 2026-07-06:
 // top nav con tabs, sidebar de chats, protoboard central, panel de detalle a
 // la derecha (paso, instrucción, componente, coordenadas, lista de componentes)
@@ -105,7 +244,10 @@ function VistaPrincipal({
   const total = instrucciones.length
   const [paso, setPaso] = useState(1)
   const [revelado, setRevelado] = useState(true)
-  const [tab, setTab] = useState<'simulacion' | 'esquema' | 'codigo'>('simulacion')
+  const [tab, setTab] = useState<'simulacion' | 'esquema' | 'codigo' | 'metricas'>('simulacion')
+  // Consumo de cada turno del chat (tokens/tiempo/modelo) — ver pestaña
+  // "Métricas". Se acumula en vivo; la corrida inicial viene de sesion.metricasProceso.
+  const [usoChat, setUsoChat] = useState<{ uso: Uso; intencion: string }[]>([])
   const [chatAbierto, setChatAbierto] = useState(true)
   const [menuUsuarioAbierto, setMenuUsuarioAbierto] = useState(false)
   // Ancho arrastrable de la columna de chat (issue: chat responsivo).
@@ -119,7 +261,7 @@ function VistaPrincipal({
   const [verBiblioteca, setVerBiblioteca] = useState(false)
   const [mensajes, setMensajes] = useState<Mensaje[]>(() =>
     sesion.mensajes ?? [
-      { de: 'ai', texto: `¡Listo! Analicé tu esquemático «${sesion.nombre}» y lo dividí en ${instrucciones.length} pasos para armarlo en la protoboard. Ve avanzando con las flechas ← → y te voy mostrando cada paso. Si tienes alguna pregunta, aquí estoy. 🙂` },
+      { de: 'ai', texto: `¡Listo! Analicé tu esquemático «${sesion.nombre}» y lo dividí en ${instrucciones.length} pasos para armarlo en la protoboard. Ve avanzando con las flechas ← → y te voy mostrando cada paso. Si tienes alguna pregunta, aquí estoy.` },
     ],
   )
   const [tiempo, setTiempo] = useState(0)
@@ -253,6 +395,7 @@ function VistaPrincipal({
     simulacion: { bg: 'var(--accent)', fg: 'var(--bg2)' },
     esquema: { bg: '#2563eb', fg: '#ffffff' },
     codigo: { bg: '#0f172a', fg: '#e2e8f0' },
+    metricas: { bg: '#059669', fg: '#ffffff' },
   }
 
   return (
@@ -265,14 +408,14 @@ function VistaPrincipal({
         </button>
         <div className="flex-1" />
         <div className="flex items-center gap-1 rounded-full p-1" style={{ background: 'var(--bg1)' }}>
-          {(['simulacion', 'esquema', 'codigo'] as const).map((t) => (
+          {(['simulacion', 'esquema', 'codigo', 'metricas'] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
               className={tabClass(t)}
               style={t === tab ? { background: COLOR_TAB[t].bg, color: COLOR_TAB[t].fg } : { color: 'var(--ink-soft)' }}
             >
-              {t === 'simulacion' ? 'Simulación' : t === 'esquema' ? 'Esquema' : 'Código'}
+              {t === 'simulacion' ? 'Simulación' : t === 'esquema' ? 'Esquema' : t === 'codigo' ? 'Código' : 'Métricas'}
             </button>
           ))}
         </div>
@@ -427,6 +570,7 @@ function VistaPrincipal({
                 setInstrucciones(nuevas)
                 setPaso(1)
               }}
+              onUso={(uso, intencion) => setUsoChat((u) => [...u, { uso, intencion }])}
             />
           )}
         </aside>
@@ -435,13 +579,15 @@ function VistaPrincipal({
         <main className="flex-1 flex flex-col min-w-0 min-h-0">
           <div
             ref={contRef}
-            className={`flex-1 min-h-0 m-5 rounded-2xl relative overflow-hidden ${tab === 'codigo' ? '' : 'grid place-items-center'}`}
+            className={`flex-1 min-h-0 m-5 rounded-2xl relative overflow-hidden ${tab === 'codigo' || tab === 'metricas' ? '' : 'grid place-items-center'}`}
             style={{ background: 'var(--bg1)' }}
           >
             {tab === 'simulacion' ? (
               <Protoboard componentes={componentes} cables={cables} baterias={baterias} escala={escala} />
             ) : tab === 'codigo' ? (
               <PanelCodigo netlist={sesion.netlist} instrucciones={instrucciones} />
+            ) : tab === 'metricas' ? (
+              <PanelMetricas metricasProceso={sesion.metricasProceso} usoChat={usoChat} />
             ) : sesion.imagenEsquema ? (
               <img
                 src={sesion.imagenEsquema}
