@@ -1,5 +1,5 @@
 import { Wrench, CircleHelp, BookOpen, type LucideIcon } from 'lucide-react'
-import type { Instruccion, Netlist } from '../circuit/types'
+import type { Instruccion, Netlist, Uso } from '../circuit/types'
 
 // La lista de proveedores la sirve el backend en GET /proveedores
 // (ver api/proveedores.ts). No se hardcodea aquí para que no se desincronicen.
@@ -37,4 +37,8 @@ export type Sesion = {
   imagenEsquema?: string
   // Conversación precargada (chats de prueba / futuras sesiones restauradas).
   mensajes?: { de: 'ai' | 'tu'; texto: string }[]
+  // Consumo real de la corrida inicial (① /analizar, ② /planificar) — ver
+  // pestaña "Métricas" en VistaPrincipal.tsx. Ninguno de los dos existe en
+  // sesiones de ejemplo (no pasaron por el backend).
+  metricasProceso?: { extractor?: Uso; planner?: Uso }
 }
