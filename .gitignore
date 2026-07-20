@@ -1,0 +1,12 @@
+# Copias de conflicto de iCloud Drive: iCloud sincroniza ~/Documents y crea
+# "archivo 2.ext" cuando detecta escrituras casi simultáneas (típico durante git
+# checkout/merge). No son archivos reales del proyecto — ver CLAUDE.md raíz y
+# scripts/limpiar-duplicados-icloud.sh.
+* [0-9].*
+
+# El hook de git de graphify (CircuitBuilderAI/CLAUDE.md §0.B) corre siempre desde
+# la raíz del repo y, sin un ".graphify_root" que lo redirija, regenera el grafo
+# acá en vez de en CircuitBuilderAI/graphify-out (la ubicación real). El original
+# ya está ignorado vía .git/info/exclude (local, no compartido) — esta regla cubre
+# al equipo completo por si a alguien más le pasa lo mismo.
+/graphify-out/
