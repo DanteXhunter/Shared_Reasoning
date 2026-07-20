@@ -37,8 +37,9 @@ export type Sesion = {
   imagenEsquema?: string
   // Conversación precargada (chats de prueba / futuras sesiones restauradas).
   mensajes?: { de: 'ai' | 'tu'; texto: string }[]
-  // Consumo real de la corrida inicial (① /analizar, ② /planificar) — ver
-  // pestaña "Métricas" en VistaPrincipal.tsx. Ninguno de los dos existe en
-  // sesiones de ejemplo (no pasaron por el backend).
-  metricasProceso?: { extractor?: Uso; planner?: Uso }
+  // Consumo real persistido en la BD (columna metricas): el análisis inicial
+  // (① /analizar extractor, ② /planificar) más una lista con cada interacción
+  // del chat. Alimenta la pestaña "Métricas" y sobrevive a recargar/reabrir la
+  // sesión. Ausente en sesiones de ejemplo (no pasaron por el backend).
+  metricasProceso?: { extractor?: Uso; planner?: Uso; chat?: { uso: Uso; intencion: string }[] }
 }
