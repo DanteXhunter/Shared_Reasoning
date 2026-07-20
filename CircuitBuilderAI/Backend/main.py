@@ -45,6 +45,7 @@ from collections import Counter
 from datetime import datetime
 import json
 import os
+import secrets
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -341,6 +342,25 @@ class ResultadoBusqueda(BaseModel):
     fragmento: str | None = None
 
 
+# ---- Compartir sesión por link ----
+# Modelo elegido: COPIA independiente, no edición colaborativa en vivo. Quien
+# recibe el link se trae un snapshot (netlist + instrucciones + historial) a
+# su propia cuenta; desde ahí cada quien sigue su propio camino sin pisarse.
+
+class SesionCompartirResponse(BaseModel):
+    token: str
+
+
+class SesionCompartidaPreview(BaseModel):
+    nombre: str
+    fecha: datetime | None
+    cantidad_mensajes: int
+
+
+class SesionImportada(BaseModel):
+    sesion_id: str
+
+
 @app.post("/sesiones", response_model=SesionCreada, status_code=201)
 def crear_sesion(
     datos: SesionCrear,
@@ -543,6 +563,92 @@ def _buscar_sesion_del_usuario(db: Session, sesion_id: str, usuario_id):
         return None
 
 
+def _buscar_sesion_por_token(db: Session, token: str) -> Sesion | None:
+    """Busca una sesión por su token de compartir — a propósito NO filtra por
+    dueño: el token en sí es la credencial de acceso a este link puntual."""
+    return db.query(Sesion).filter(Sesion.token_compartido == token).first()
+
+
+@app.post("/sesiones/{sesion_id}/compartir", response_model=SesionCompartirResponse)
+def compartir_sesion(
+    sesion_id: str,
+    usuario: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+):
+    """Genera (o reutiliza) el link para compartir esta sesión. Solo el dueño
+    puede generarlo. Idempotente a propósito: si ya se había compartido, se
+    devuelve el mismo token en vez de invalidar links que ya se repartieron."""
+    sesion = _buscar_sesion_del_usuario(db, sesion_id, usuario.id)
+    if sesion is None:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada.")
+
+    if not sesion.token_compartido:
+        sesion.token_compartido = secrets.token_urlsafe(16)
+        db.commit()
+        db.refresh(sesion)
+
+    return SesionCompartirResponse(token=sesion.token_compartido)
+
+
+@app.get("/sesiones/compartidas/{token}", response_model=SesionCompartidaPreview)
+def vista_previa_compartida(
+    token: str,
+    usuario: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+):
+    """Preview antes de importar — a propósito NO expone netlist/instrucciones/
+    historial completos acá, solo lo necesario para decidir si importarla."""
+    sesion = _buscar_sesion_por_token(db, token)
+    if sesion is None:
+        raise HTTPException(status_code=404, detail="Este link de circuito compartido no es válido.")
+
+    cantidad_mensajes = db.query(ChatMensaje).filter(ChatMensaje.sesion_id == sesion.id).count()
+
+    return SesionCompartidaPreview(nombre=sesion.nombre, fecha=sesion.fecha, cantidad_mensajes=cantidad_mensajes)
+
+
+@app.post("/sesiones/compartidas/{token}/importar", response_model=SesionImportada, status_code=201)
+def importar_sesion_compartida(
+    token: str,
+    usuario: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+):
+    """Trae una COPIA independiente de la sesión compartida a la cuenta de
+    quien importa — netlist, instrucciones, esquemático y el historial de chat
+    hasta este momento. A partir de aquí las dos copias siguen su propio
+    camino; nada queda enlazado con la sesión original (ver modelo elegido en
+    el comentario junto a SesionCompartirResponse)."""
+    original = _buscar_sesion_por_token(db, token)
+    if original is None:
+        raise HTTPException(status_code=404, detail="Este link de circuito compartido no es válido.")
+
+    copia = Sesion(
+        usuario_id=usuario.id,
+        nombre=original.nombre,
+        netlist=original.netlist,
+        instrucciones=original.instrucciones,
+        imagen_esquema=original.imagen_esquema,
+        modo_detectado=original.modo_detectado,
+        metricas=original.metricas,
+    )
+    db.add(copia)
+    db.flush()  # asigna copia.id sin cerrar la transacción, para copiar los mensajes abajo
+
+    mensajes_originales = (
+        db.query(ChatMensaje)
+        .filter(ChatMensaje.sesion_id == original.id)
+        .order_by(ChatMensaje.timestamp.asc())
+        .all()
+    )
+    for m in mensajes_originales:
+        db.add(ChatMensaje(sesion_id=copia.id, rol=m.rol, contenido=m.contenido, modo_detectado=m.modo_detectado))
+
+    db.commit()
+    db.refresh(copia)
+
+    return SesionImportada(sesion_id=str(copia.id))
+
+
 @app.post("/analizar")
 async def analizar_esquematico(
     imagen: UploadFile = File(...),
@@ -734,14 +840,17 @@ def _persistir_interaccion_chat(db, sesion, historial_list, resultado, modo, int
         if resultado.get("instrucciones_actualizadas"):
             sesion.instrucciones = resultado["instrucciones_actualizadas"]
 
-    # Métricas acumuladas. Se reasigna el dict completo para que SQLAlchemy
-    # detecte el cambio en la columna JSONB.
+    # Métricas de la sesión (columna JSONB). Forma unificada que consume la
+    # pestaña "Métricas" del front: {extractor, planner, chat[]}. El análisis
+    # inicial (extractor/planner) lo guardó crear_sesion; acá solo se agrega
+    # cada interacción del chat a la lista `chat`, para que sobreviva a recargar
+    # o reabrir la sesión desde el historial. Se reasigna el dict completo para
+    # que SQLAlchemy detecte el cambio en la columna JSONB.
     uso = resultado.get("uso", {})
     m = dict(sesion.metricas or {})
-    m["tokens_entrada"] = m.get("tokens_entrada", 0) + uso.get("tokens_entrada", 0)
-    m["tokens_salida"] = m.get("tokens_salida", 0) + uso.get("tokens_salida", 0)
-    m["tokens_total"] = m["tokens_entrada"] + m["tokens_salida"]
-    m["llamadas_llm"] = m.get("llamadas_llm", 0) + 1
+    chat = list(m.get("chat", []))
+    chat.append({"uso": uso, "intencion": intencion})
+    m["chat"] = chat
     sesion.metricas = m
 
     db.commit()

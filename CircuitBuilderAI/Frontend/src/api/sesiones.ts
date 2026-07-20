@@ -1,4 +1,4 @@
-import type { Instruccion, Netlist } from '../circuit/types'
+import type { Instruccion, Netlist, Uso } from '../circuit/types'
 import type { Sesion } from '../ui/tipos'
 import { fetchAutenticado } from './auth'
 
@@ -14,13 +14,22 @@ export type ResultadoBusqueda = { id: string; nombre: string; fecha: string | nu
 
 type SesionResumenAPI = { id: string; nombre: string; fecha: string | null; modo_detectado: string | null }
 
+// Forma unificada de la columna `metricas` (JSONB) — la misma que consume la
+// pestaña "Métricas": el análisis inicial (extractor/planner) más una lista
+// con cada interacción del chat. Ver _persistir_interaccion_chat en main.py.
+export type MetricasSesion = {
+  extractor?: Uso
+  planner?: Uso
+  chat?: { uso: Uso; intencion: string }[]
+}
+
 type SesionCompletaAPI = {
   id: string
   nombre: string
   netlist: Netlist | null
   instrucciones: Instruccion[] | null
   modo_detectado: string | null
-  metricas: Record<string, unknown> | null
+  metricas: MetricasSesion | null
   fecha: string | null
   historial: { rol: 'user' | 'assistant'; contenido: string }[]
   imagen_esquema: string | null
@@ -34,6 +43,9 @@ export async function crearSesion(datos: {
   instrucciones: Instruccion[]
   // Data URL ya comprimida (~1200px) — ver comprimirImagen en Bienvenida.tsx.
   imagenEsquema?: string
+  // Métricas del análisis inicial (extractor + planner) para que la pestaña
+  // "Métricas" sobreviva a recargar o reabrir la sesión desde el historial.
+  metricas?: MetricasSesion
 }): Promise<string> {
   const res = await fetchAutenticado(`${API_URL}/sesiones`, {
     method: 'POST',
@@ -43,7 +55,7 @@ export async function crearSesion(datos: {
       netlist: datos.netlist,
       instrucciones: datos.instrucciones,
       modo: null,
-      metricas: null,
+      metricas: datos.metricas ?? null,
       imagen_esquema: datos.imagenEsquema ?? null,
     }),
   })
@@ -90,6 +102,37 @@ export async function borrarSesion(id: string): Promise<void> {
   if (!res.ok) throw new Error('No se pudo borrar la conversación.')
 }
 
+// Genera (o reutiliza) el link para compartir una sesión. Idempotente: llamar
+// de nuevo devuelve el mismo token, no invalida links ya repartidos.
+export async function compartirSesion(id: string): Promise<string> {
+  const res = await fetchAutenticado(`${API_URL}/sesiones/${id}/compartir`, { method: 'POST' })
+  if (!res.ok) throw new Error('No se pudo generar el link para compartir.')
+  const data = await res.json()
+  return data.token as string
+}
+
+export type VistaPreviaCompartida = { nombre: string; fecha: string | null; cantidadMensajes: number }
+
+// Preview de una sesión compartida (por su token) antes de importarla — no
+// trae el netlist/instrucciones/historial completos, solo lo necesario para
+// que el usuario decida si quiere traérsela a su cuenta.
+export async function obtenerVistaPreviaCompartida(token: string): Promise<VistaPreviaCompartida> {
+  const res = await fetchAutenticado(`${API_URL}/sesiones/compartidas/${token}`)
+  if (!res.ok) throw new Error('Este link de circuito compartido no es válido.')
+  const data = await res.json()
+  return { nombre: data.nombre, fecha: data.fecha, cantidadMensajes: data.cantidad_mensajes }
+}
+
+// Trae una COPIA independiente de la sesión compartida a la cuenta del
+// usuario actual (netlist + instrucciones + historial de chat hasta ese
+// momento) y devuelve el id de la nueva sesión ya creada.
+export async function importarSesionCompartida(token: string): Promise<string> {
+  const res = await fetchAutenticado(`${API_URL}/sesiones/compartidas/${token}/importar`, { method: 'POST' })
+  if (!res.ok) throw new Error('No se pudo importar el circuito compartido.')
+  const data = await res.json()
+  return data.sesion_id as string
+}
+
 // Abre una sesión guardada y la convierte al shape de Sesion del frontend.
 // La BD no persiste proveedor/nivel, así que se pasan por defecto (nivel
 // viene del perfil del usuario). El esquemático sí se restaura si se guardó.
@@ -119,5 +162,8 @@ export async function abrirSesion(
     imagenEsquema: s.imagen_esquema ?? undefined,
     // Si aún no hay chat, dejamos que VistaPrincipal muestre su bienvenida.
     mensajes: mensajes.length ? mensajes : undefined,
+    // Métricas persistidas (análisis inicial + interacciones del chat) para
+    // que la pestaña "Métricas" no aparezca vacía al reabrir la sesión.
+    metricasProceso: s.metricas ?? undefined,
   }
 }

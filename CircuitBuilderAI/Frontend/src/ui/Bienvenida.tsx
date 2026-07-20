@@ -117,11 +117,15 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
       // caemos al nombre del archivo sin extensión.
       const nombre = analisis.resultado.nombre?.trim() || imagen.name.replace(/\.[^.]+$/, '')
 
+      // Métricas del análisis inicial — se persisten con la sesión para que la
+      // pestaña "Métricas" no se pierda al recargar o reabrir del historial.
+      const metricasProceso = { extractor: analisis.uso, planner: plan.uso }
+
       // Persistimos la sesión (#73) para que aparezca en el historial. Si falla,
       // seguimos sin id: el workspace funciona igual, solo no se guardará.
       let id: string | undefined
       try {
-        id = await crearSesion({ nombre, netlist: analisis.resultado, instrucciones: plan.instrucciones, imagenEsquema })
+        id = await crearSesion({ nombre, netlist: analisis.resultado, instrucciones: plan.instrucciones, imagenEsquema, metricas: metricasProceso })
       } catch {
         id = undefined
       }
@@ -137,7 +141,7 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
         nombre,
         nivel,
         imagenEsquema,
-        metricasProceso: { extractor: analisis.uso, planner: plan.uso },
+        metricasProceso,
       })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error desconocido')
