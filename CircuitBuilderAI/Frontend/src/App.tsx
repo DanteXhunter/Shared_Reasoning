@@ -4,11 +4,12 @@ import Auth from './ui/Auth'
 import EncuestaNivel from './ui/EncuestaNivel'
 import Bienvenida from './ui/Bienvenida'
 import VistaPrincipal from './ui/VistaPrincipal'
+import ImportarCompartido from './ui/ImportarCompartido'
 import DevApp from './DevApp'
 import type { Sesion, Nivel } from './ui/tipos'
 import { actualizarNivel, alExpirarSesion, borrarToken, obtenerUsuarioActual, type Usuario } from './api/auth'
 
-type Paso = 'intro' | 'auth' | 'encuesta' | 'bienvenida' | 'principal'
+type Paso = 'intro' | 'auth' | 'encuesta' | 'importar' | 'bienvenida' | 'principal'
 
 // ============================================================
 //  Conmutador raíz:
@@ -22,6 +23,10 @@ type Paso = 'intro' | 'auth' | 'encuesta' | 'bienvenida' | 'principal'
 // ============================================================
 function App() {
   const [modoDev, setModoDev] = useState(() => new URLSearchParams(window.location.search).has('dev'))
+  // Link de circuito compartido (ver ImportarCompartido.tsx + main.py
+  // /sesiones/compartidas/{token}) — se resuelve una vez, después del login
+  // (y de la encuesta de nivel si hace falta), antes de ir a "bienvenida".
+  const [tokenCompartido] = useState(() => new URLSearchParams(window.location.search).get('compartido'))
   const [paso, setPaso] = useState<Paso>('intro')
   const [nivel, setNivel] = useState<Nivel>('intermedio')
   const [sesion, setSesion] = useState<Sesion | null>(null)
@@ -38,8 +43,10 @@ function App() {
     setNivel(usuario.nivel)
     // La encuesta se muestra siempre que el nivel no esté confirmado todavía
     // (primera vez tras el registro, o si se quedó a medias); una vez
-    // confirmado, nunca se vuelve a mostrar.
-    setPaso(usuario.nivelConfirmado ? 'bienvenida' : 'encuesta')
+    // confirmado, nunca se vuelve a mostrar. Si venía un link de circuito
+    // compartido, se resuelve antes de "bienvenida" (nunca antes de la encuesta).
+    if (!usuario.nivelConfirmado) setPaso('encuesta')
+    else setPaso(tokenCompartido ? 'importar' : 'bienvenida')
   }
 
   // Si el token expira o deja de ser válido en cualquier request protegido,
@@ -67,7 +74,7 @@ function App() {
 
   async function alElegirNivel(n: Nivel) {
     setNivel(n)
-    setPaso('bienvenida')
+    setPaso(tokenCompartido ? 'importar' : 'bienvenida')
     try {
       await actualizarNivel(n)
     } catch {
@@ -99,6 +106,15 @@ function App() {
       return <Auth onEntrar={alAutenticar} />
     case 'encuesta':
       return <EncuestaNivel onElegir={alElegirNivel} />
+    case 'importar':
+      return (
+        <ImportarCompartido
+          token={tokenCompartido!}
+          nivel={nivel}
+          onListo={setSesion}
+          onOmitir={() => setPaso('bienvenida')}
+        />
+      )
     case 'bienvenida':
       return (
         <Bienvenida

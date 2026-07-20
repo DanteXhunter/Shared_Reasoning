@@ -64,17 +64,19 @@ Usuario sube imagen
 → Endpoint /procesar (SSE) → frontend renderiza canvas y pasos
 
 Usuario escribe en el chat (todo corre con el modelo de RAZÓN, nunca visión)
-→ Chat Agent v2 → clasificador de intención (temperature=0)
+→ Chat Agent v2 → clasificador de intención (temperature=0, 4 categorías)
 → "responder"            → Chat Agent base responde con texto
-→ "modificar_netlist"    → LLM modifica netlist → Planner regenera todo
-→ "modificar_posiciones" → LLM extrae override NUMÉRICO ("mueve R1 a fila 10") → algoritmo aplica → Planner regenera
+→ "modificar_netlist"    → LLM modifica netlist (agregar/quitar/reconectar) → Planner regenera todo
+→ "modificar_posiciones" → LLM extrae override NUMÉRICO o, si no hay fila exacta, una instrucción libre → Planner regenera
+→ "proponer_alternativa" → Planner regenera pidiendo una distribución DISTINTA a la actual (sin números ni componentes concretos)
 → Endpoint /chat (SSE) → frontend actualiza canvas y pasos
 ```
 
-⚠️ **Deuda conocida (detalle completo en §10):** pedidos ABIERTOS de "otro armado" /
-"arma diferente" (sin números concretos) NO regeneran nada — el extractor de
-posiciones no encuentra overrides que sacar y el chat cae en modo "responder" (solo
-texto, sin tocar canvas ni instrucciones).
+✅ **Resuelto (2026-07-16, detalle completo en §10):** pedidos ABIERTOS de "otro armado" /
+"arma diferente" y pedidos que nombran un componente sin fila exacta ("mueve R4 a la
+derecha") ya regeneran el circuito — antes caían en modo "responder" (solo texto, sin
+tocar canvas ni instrucciones). Queda un gap relacionado, documentado y pospuesto a
+propósito: el clasificador solo ve el último mensaje, no el historial (ver §10).
 
 ---
 
@@ -282,14 +284,14 @@ que el chat no vuelve a invocar ese camino cuando el pedido es abierto.
 
 ## 10. Chat Agent — decisiones de diseño
 
-- **Clasificador de intención a temperature=0:** para consistencia en la categorización — `responder`, `modificar_netlist`, `modificar_posiciones`.
+- **Clasificador de intención a temperature=0:** para consistencia en la categorización — `responder`, `modificar_netlist`, `modificar_posiciones`, `proponer_alternativa` (4ta categoría, ver más abajo).
 - **Modificar posición ≠ modificar netlist:** mover un componente físicamente no cambia la topología eléctrica. El netlist queda intacto; solo se recalculan coordenadas y cables con override.
 - **Override de posición:** el LLM extrae `{componente_id, fila_nueva}` del mensaje. Ese override se le pasa al **planner como restricción a respetar** (no lo aplica un algoritmo fijo — ver corrección en §9); si no es eléctricamente posible, el planner explica y usa la alternativa más cercana, y `validador.py` garantiza la física.
-- **Validación de colisiones pendiente:** el sistema no verifica aún si dos componentes colisionan en la misma fila al aplicar un override. Deuda técnica conocida.
+- **✅ Validación de colisiones — resuelta (2026-07-16):** `validador.py` ahora detecta cuando dos componentes DISTINTOS quedan en el mismo hueco exacto (fila+columna), no solo a nivel de strip completo. Verificado contra una propuesta real y rota de `o3-mini`: 12/12 colisiones detectadas, sin falsos positivos en layouts válidos conocidos.
 - **`chat_agent_v2.py` en vez de modificar `chat_agent.py`:** el #66 ya estaba mergeado. Tocar ese archivo en otra rama genera conflictos innecesarios.
 - **Se accede a `proveedor.client` directamente:** el método `chat()` del provider no soporta system prompt ni contexto de circuito. Evita modificar la interfaz base que comparten todos los providers.
 
-### 🔴 Bug activo — pedidos ABIERTOS de rearmado no regeneran nada (en implementación: Diego — rama `feat/planner-scaffold-netgraph`)
+### ✅ Resuelto — pedidos ABIERTOS de rearmado ya regeneran el circuito (Diego — rama `feat/planner-scaffold-netgraph`)
 
 **Síntoma:** el usuario pide algo como *"propón otro armado"* o *"arma diferente"* SIN
 dar números concretos (a diferencia de *"mueve R1 a la fila 10"*, que sí funciona). El
@@ -314,36 +316,73 @@ front.
    front, así que `ChatPanel.onInstruccionesActualizadas` nunca se dispara y el
    protoboard/pasos se quedan exactamente como estaban.
 
-**Direcciones evaluadas (decisión tomada abajo):**
-- **(a)** Cuando `overrides` viene vacío pero la intención es `modificar_posiciones`,
-  en vez de caer a "responder", volver a llamar al planner pidiéndole una
-  distribución **alternativa** (pasarle las instrucciones anteriores como contexto de
-  "qué NO repetir"). Reutiliza toda la validación física que el planner ya tiene.
-- **(b)** Agregar una intención nueva (ej. `proponer_alternativa`), separada de
-  `modificar_posiciones`, para no forzar al extractor de overrides numéricos a cubrir
-  un caso que no es el suyo — el clasificador tendría que distinguir "dame una fila
-  específica" de "dame cualquier distribución distinta a la actual".
-- Cualquiera de las dos debe seguir devolviendo `instrucciones_actualizadas` en la
-  respuesta — ese contrato ya funciona bien hoy para `modificar_netlist` y
-  `modificar_posiciones` con números explícitos, no hay que tocarlo.
+**✅ Implementado y verificado (2026-07-16, Diego — rama `feat/planner-scaffold-netgraph`): opción (b) + refinamiento net-graph + una extensión más.**
 
-**✅ Decisión (2026-07-15, Diego — rama `feat/planner-scaffold-netgraph`): opción (b) + refinamiento net-graph.**
-- Se agrega la intención **`proponer_alternativa`**, separada de `modificar_posiciones`,
-  para que el clasificador distinga "mueve R1 a la fila 10" (override numérico) de
-  "arma diferente / propón otro armado" (distribución alternativa). Evita sobrecargar el
-  extractor de overrides numéricos con un caso que no es el suyo.
-- **Refinamiento (idea de Diego):** el planner recibirá el **net-graph explícito** de
-  `agents/topologia.construir_nets()` (los nodos eléctricos ya agrupados) como base de
-  razonamiento, en vez de re-deducir la topología desde el netlist plano. Hoy ese grafo
-  solo se usa como juez en `validador.py`; pasarlo TAMBIÉN al planner lo vuelve el
-  cimiento del armado (menos errores) y el mismo grafo persistente sirve para validar
-  propuestas del usuario ("¿esto es eléctricamente posible?") sin recalcularlo.
-- La ruta nueva respeta el contrato existente: devuelve `instrucciones_actualizadas`
-  para que el front actualice canvas y pasos.
+1. **Nueva intención `proponer_alternativa`**, separada de `modificar_posiciones` — cubre
+   pedidos abiertos sin nombrar componentes ("arma diferente", "optimiza la
+   distribución"). Redispara el planner pasándole la distribución actual
+   (`planner_layout_previo` → `serializar_layout_previo()`) como "esto NO lo repitas".
+   Verificado: clasificador 8/8 estable, flujo completo 3/3 con distribución
+   distinta y válida.
+2. **Net-graph como cimiento del planner:** `serializar_nets()` (misma fuente que ya
+   usaba `validador.py` como juez) ahora también se le entrega al planner en el
+   prompt, ANTES de que proponga nada — ya no re-deduce la topología desde el
+   netlist plano.
+3. **Extensión no prevista originalmente — `modificar_posiciones` sin fila exacta:**
+   se descubrió un caso hermano del bug original: pedidos que SÍ nombran un
+   componente pero sin número de fila ("mueve R4 a la derecha", "dale más espacio
+   al jumper") también caían a "responder". `_aplicar_modificacion_posiciones()`
+   ahora también puede devolver una `instruccion_libre` (texto, no un dict de
+   filas), que el planner recibe como restricción en lenguaje natural
+   (`planner_restriccion_libre`, mismo mecanismo que el override numérico).
+   Verificado con el mensaje real reportado por Diego: 3/3 regenera instrucciones
+   en vez de caer a texto.
+4. **Clasificador de `modificar_netlist` reforzado:** pedidos que agregan/quitan un
+   componente nuevo ("implementa una resistencia limitadora") a veces se confundían
+   con `proponer_alternativa` porque ninguno de los dos nombra un pin/nodo exacto.
+   Se amplió la descripción de la categoría para cubrir explícitamente
+   agregar/quitar/reemplazar componentes, no solo reconectar pines existentes.
+   Verificado: de una tasa inconsistente a 8/8 estable, sin regresión en los casos
+   genuinos de `proponer_alternativa`.
 
-**Cómo reproducirlo:** subir cualquier esquemático, dejar que arme normal, y en el chat
-escribir *"propón otro armado y renderiza los pasos"* (sin mencionar filas). Comparar
-contra *"mueve R1 a la fila 10"*, que sí actualiza todo correctamente.
+**Todas las rutas nuevas respetan el contrato existente:** devuelven
+`instrucciones_actualizadas` para que el front actualice canvas y pasos — no se tocó
+ese contrato.
+
+**🟡 Gap relacionado, identificado y pospuesto a propósito (no es parte de este
+arreglo):** el clasificador de intención solo ve el ÚLTIMO mensaje del usuario, nunca
+el historial de la conversación. Un mensaje de seguimiento que no nombra el
+componente/cambio otra vez (ej. *"pero quiero que me lo muestres"*, *"no hiciste
+ningún cambio"*) no tiene con qué clasificar correctamente y cae a "responder". Se
+confirmó el patrón con llamadas reales dos veces en la misma sesión. Arreglarlo
+requiere pasar contexto de turnos anteriores al clasificador y a los 3 extractores del
+chat (`_aplicar_modificacion_netlist`, `_aplicar_modificacion_posiciones`, y el
+propio clasificador) — se decidió NO hacerlo todavía, queda como el siguiente punto
+natural de esta rama si se retoma.
+
+**Cómo reproducirlo (para confirmar que sigue resuelto):** subir cualquier
+esquemático, dejar que arme normal, y en el chat escribir *"propón otro armado y
+renderiza los pasos"* (sin mencionar filas) — debe regenerar. Comparar contra *"mueve
+R1 a la fila 10"*, que ya funcionaba antes.
+
+### 10.1 Frontend — otros cambios de esta sesión (2026-07-16, Diego)
+
+- **Pestaña "Métricas"** en `VistaPrincipal.tsx` (junto a Simulación/Esquema/Código):
+  muestra tokens/tiempo/modelo/intentos del Extractor y el Planner de la corrida
+  inicial, más un acumulado en vivo de cada interacción del chat. El backend ya
+  calculaba esos datos (`uso` en cada respuesta) pero el frontend los descartaba —
+  no fue una feature nueva de backend, fue exponer algo que ya existía.
+- **Chat sin emojis:** regla explícita en el `SYSTEM_PROMPT` de `agent_chat.py` +
+  emojis hardcodeados quitados de varios lugares del frontend que NO eran generados
+  por el LLM (saludo inicial en `VistaPrincipal.tsx`, mensajes de ejemplo en
+  `ejemploSensorLuz.ts`, prefijo de error en `ChatPanel.tsx`). Los iconos de UI fuera
+  del chat (dev screen, login, perfil, biblioteca de componentes) se dejaron
+  intactos a propósito.
+- **Encuesta de nivel — "Intermedio" oculto momentáneamente:** a pedido de Diego,
+  solo Básico y Experto son seleccionables por ahora en `EncuestaNivel.tsx`. El tipo
+  `Nivel` y el resto del backend (`reglas_nivel`, `NIVEL_A_MODO`, etc.) siguen
+  soportando `intermedio` sin cambios — es una ocultación de UI, no un borrado;
+  restaurarlo es descomentar el objeto en el arreglo `NIVELES`.
 
 ---
 

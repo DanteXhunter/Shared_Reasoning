@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Plus, History, PanelLeft, ArrowLeft, ArrowRight,
-  Eye, EyeOff, User, LayoutGrid, ChevronDown, X, Settings, LogOut,
+  Eye, EyeOff, User, LayoutGrid, ChevronDown, X, Settings, LogOut, Share2,
 } from 'lucide-react'
 import Protoboard from '../components/Protoboard'
 import ComponentGallery from '../components/ComponentGallery'
@@ -17,7 +17,7 @@ import { calcularBandas } from '../circuit/resistorColorCode'
 import { boardSize } from '../circuit/grid'
 import type { Sesion } from './tipos'
 import type { Instruccion, Netlist, Uso } from '../circuit/types'
-import { abrirSesion } from '../api/sesiones'
+import { abrirSesion, compartirSesion } from '../api/sesiones'
 import { useHistorialSesiones, BuscadorHistorial, ItemHistorial, ToastHistorial } from './HistorialSesiones'
 import type { Usuario } from '../api/auth'
 
@@ -246,8 +246,11 @@ function VistaPrincipal({
   const [revelado, setRevelado] = useState(true)
   const [tab, setTab] = useState<'simulacion' | 'esquema' | 'codigo' | 'metricas'>('simulacion')
   // Consumo de cada turno del chat (tokens/tiempo/modelo) — ver pestaña
-  // "Métricas". Se acumula en vivo; la corrida inicial viene de sesion.metricasProceso.
-  const [usoChat, setUsoChat] = useState<{ uso: Uso; intencion: string }[]>([])
+  // "Métricas". Se siembra con lo ya persistido en la sesión (al reabrirla del
+  // historial) y se sigue acumulando en vivo desde ahí.
+  const [usoChat, setUsoChat] = useState<{ uso: Uso; intencion: string }[]>(
+    () => sesion.metricasProceso?.chat ?? [],
+  )
   const [chatAbierto, setChatAbierto] = useState(true)
   const [menuUsuarioAbierto, setMenuUsuarioAbierto] = useState(false)
   // Ancho arrastrable de la columna de chat (issue: chat responsivo).
@@ -265,6 +268,26 @@ function VistaPrincipal({
     ],
   )
   const [tiempo, setTiempo] = useState(0)
+  // Compartir esta sesión por link (ver ImportarCompartido.tsx + main.py).
+  const [compartiendo, setCompartiendo] = useState(false)
+  const [linkCopiado, setLinkCopiado] = useState(false)
+
+  async function compartir() {
+    if (!sesion.id || compartiendo) return
+    setCompartiendo(true)
+    try {
+      const token = await compartirSesion(sesion.id)
+      const link = `${window.location.origin}${window.location.pathname}?compartido=${token}`
+      await navigator.clipboard.writeText(link)
+      setLinkCopiado(true)
+      setTimeout(() => setLinkCopiado(false), 2500)
+    } catch {
+      // Si falla (sin conexión, etc.), simplemente no se copia nada — el
+      // botón vuelve a estar disponible para reintentar.
+    } finally {
+      setCompartiendo(false)
+    }
+  }
 
   // Historial real de sesiones del usuario (#73), con búsqueda, renombrar y
   // borrar (#88 ampliado). Se recarga al cambiar de sesión para que una
@@ -519,14 +542,28 @@ function VistaPrincipal({
               title="Arrastra para redimensionar el chat"
             />
           )}
-          {/* Encabezado: nombre del chat actual + minimizar (el historial vive en el riel ☰) */}
+          {/* Encabezado: nombre del chat actual + compartir (el historial vive en el riel ☰) */}
           <div className="flex items-center gap-2 shrink-0 h-8">
-            
-            <span className="text-sm font-semibold truncate">
+            <span className="text-sm font-semibold truncate flex-1">
               {vistaChats === 'historial' ? 'Historial de chats' : sesion.nombre}
             </span>
-            
+            {vistaChats !== 'historial' && sesion.id && (
+              <button
+                onClick={compartir}
+                disabled={compartiendo}
+                className="grid place-items-center w-7 h-7 rounded-lg hover:bg-black/5 transition shrink-0 disabled:opacity-50"
+                style={linkCopiado ? { color: 'var(--accent)' } : { color: 'var(--ink-soft)' }}
+                title={linkCopiado ? 'Link copiado' : 'Compartir este chat'}
+              >
+                <Share2 size={15} />
+              </button>
+            )}
           </div>
+          {linkCopiado && (
+            <span className="text-xs -mt-2 shrink-0" style={{ color: 'var(--accent)' }}>
+              Link copiado — cualquiera con quien lo compartas puede traerse una copia de este chat.
+            </span>
+          )}
 
           {vistaChats === 'historial' ? (
             /* ---- Historial (misma columna), con búsqueda + renombrar/borrar (#88) ---- */

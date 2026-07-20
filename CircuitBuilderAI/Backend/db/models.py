@@ -57,6 +57,12 @@ class Sesion(Base):
     modo_detectado = Column(String(20))
     metricas = Column(JSONB)
     fecha = Column(DateTime(timezone=True), server_default=func.now())
+    # Token aleatorio para compartir esta sesión por link (NULL = nunca se
+    # compartió). Se genera en POST /sesiones/{id}/compartir; quien tiene el
+    # link puede ver un preview y traerse una COPIA independiente a su propia
+    # cuenta (POST /sesiones/compartidas/{token}/importar) — no es edición
+    # colaborativa en vivo, cada copia sigue su propio camino después.
+    token_compartido = Column(String(64), unique=True, nullable=True, index=True)
 
 
 class ChatMensaje(Base):
