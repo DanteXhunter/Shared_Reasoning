@@ -19,7 +19,7 @@ type Props = {
   nivel: string
   onInstruccionesActualizadas: (instrucciones: Instruccion[]) => void
   // Reporta el consumo de cada turno del chat — ver pestaña "Métricas".
-  onUso?: (uso: Uso, intencion: string) => void
+  onUso?: (uso: Uso, intencion: string, tipoInteraccion?: string) => void
 }
 
 function ChatPanel({ mensajes, onMensajes, sesionId, netlist, instrucciones, proveedor, proveedorRazon, nivel, onInstruccionesActualizadas, onUso }: Props) {
@@ -63,7 +63,7 @@ function ChatPanel({ mensajes, onMensajes, sesionId, netlist, instrucciones, pro
           const respuesta: MensajeHistorial = { rol: 'assistant', contenido: evento.contenido }
           setHistorial((h) => [...h, respuesta])
           onMensajes([...mensajes, { de: 'tu', texto: limpio }, { de: 'ai', texto: evento.contenido }])
-          if (evento.uso) onUso?.(evento.uso, evento.intencion_detectada)
+          if (evento.uso) onUso?.(evento.uso, evento.intencion_detectada, evento.tipo_interaccion_detectado)
         }
 
         if (evento.tipo === 'actualizado') {
@@ -73,7 +73,7 @@ function ChatPanel({ mensajes, onMensajes, sesionId, netlist, instrucciones, pro
           if (evento.instrucciones_actualizadas) {
             onInstruccionesActualizadas(evento.instrucciones_actualizadas)
           }
-          if (evento.uso) onUso?.(evento.uso, evento.intencion_detectada)
+          if (evento.uso) onUso?.(evento.uso, evento.intencion_detectada, evento.tipo_interaccion_detectado)
         }
 
         if (evento.tipo === 'error') {

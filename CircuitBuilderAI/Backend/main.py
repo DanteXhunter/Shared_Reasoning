@@ -9,7 +9,8 @@ from agents.extractor_agent import ejecutar_extractor
 from agents.planner_agent import ejecutar_planner
 from agents.chat_agent_v2 import ejecutar_chat_agent_v2
 from agents.verbosidad import normalizar_nivel
-from agents.estado import ModoInteraccion, MensajeChat
+from agents.estado import MensajeChat
+from agents.deteccion_interaccion import diagnosticar_interaccion_inicial
 from db.database import get_db
 from db.models import Usuario, Sesion, ChatMensaje
 from auth import (
@@ -34,6 +35,7 @@ from providers.catalogo import (
     descripcion_publica,
     proveedor_por_defecto,
     grupos_credencial_publicos,
+    crear_provider_chat,
     resolver_api_key_usuario,
 )
 from providers.cifrado_keys import cifrar_api_keys, descifrar_api_keys
@@ -721,9 +723,6 @@ async def planificar_circuito(
     proveedor_razon: str = Form(default=""),
     netlist: str = Form(...),
     nivel: str = Form(default="intermedio"),
-    # 'modo' (tipo de interacción) se acepta por compatibilidad pero ya no rige
-    # la geometría (la produce la capa determinística); la verbosidad usa 'nivel'.
-    modo: str = Form(default="UNDER"),
     usuario: Usuario = Depends(obtener_usuario_actual),
 ):
     if proveedor not in PROVEEDORES_VALIDOS:
@@ -755,7 +754,6 @@ async def planificar_circuito(
         "proveedor": proveedor,
         "proveedor_razon": proveedor_razon,
         "api_key_razon": api_key_razon_efectiva,
-        "modo_interaccion": ModoInteraccion(modo) if modo in [m.value for m in ModoInteraccion] else ModoInteraccion.UNDER,
         "nivel": normalizar_nivel(nivel),
         "historial_chat": [],
         "extractor_intento": 0,
@@ -797,22 +795,32 @@ async def planificar_circuito(
     # fuerza OpenAI a mitad del pipeline.
     resultado["metricas"] = metricas.resumen(proveedor_razon)
 
+    # Diagnóstico del tipo de interacción de la PRIMERA interacción de la
+    # sesión (#82) — nunca un default fijo ni derivado del nivel, siempre un
+    # diagnóstico real del LLM (ver agents/deteccion_interaccion.py). El
+    # frontend lo reenvía como `modo` al crear la sesión (POST /sesiones). Es
+    # metadata auxiliar de investigación: si el proveedor falla acá (rate
+    # limit, caído), no debe tumbar la respuesta del plan ya generado.
+    try:
+        proveedor_diagnostico = crear_provider_chat(proveedor_razon, api_key_razon_efectiva)
+        resultado["tipo_interaccion_inicial"] = await diagnosticar_interaccion_inicial(
+            nivel, proveedor_diagnostico, proveedor_razon,
+        )
+    except Exception:
+        resultado["tipo_interaccion_inicial"] = None
+
     return resultado
 
 
-NIVEL_A_MODO = {
-    "basico": ModoInteraccion.UNDER,
-    "intermedio": ModoInteraccion.ALONG,
-    "experto": ModoInteraccion.OVER,
-}
-
-
-def _persistir_interaccion_chat(db, sesion, historial_list, resultado, modo, intencion):
+def _persistir_interaccion_chat(db, sesion, historial_list, resultado, tipo_interaccion, intencion):
     """Guarda el nuevo par de mensajes (usuario + asistente) como filas
     ChatMensaje —fuente de verdad del historial—, refleja en la sesión los
     cambios de circuito que hizo el chat, acumula métricas y recalcula el modo
-    predominante."""
-    modo_valor = modo.value
+    predominante.
+
+    `tipo_interaccion` ya viene diagnosticado por el LLM (#82, ver
+    agents/deteccion_interaccion.py y el clasificador de chat_agent_v2.py) —
+    esta función solo lo persiste, no lo calcula."""
 
     # El nuevo mensaje del usuario es el último del historial que envía el
     # frontend (lo agrega justo antes de mandar la petición).
@@ -821,7 +829,7 @@ def _persistir_interaccion_chat(db, sesion, historial_list, resultado, modo, int
             sesion_id=sesion.id,
             rol="user",
             contenido=historial_list[-1].get("contenido", ""),
-            modo_detectado=modo_valor,
+            modo_detectado=tipo_interaccion,
         ))
 
     respuesta = resultado.get("respuesta", "")
@@ -830,7 +838,7 @@ def _persistir_interaccion_chat(db, sesion, historial_list, resultado, modo, int
             sesion_id=sesion.id,
             rol="assistant",
             contenido=respuesta,
-            modo_detectado=modo_valor,
+            modo_detectado=tipo_interaccion,
         ))
 
     # Si el chat modificó el circuito, la sesión guarda el estado nuevo.
@@ -849,15 +857,14 @@ def _persistir_interaccion_chat(db, sesion, historial_list, resultado, modo, int
     uso = resultado.get("uso", {})
     m = dict(sesion.metricas or {})
     chat = list(m.get("chat", []))
-    chat.append({"uso": uso, "intencion": intencion})
+    chat.append({"uso": uso, "intencion": intencion, "tipo_interaccion": tipo_interaccion})
     m["chat"] = chat
     sesion.metricas = m
 
     db.commit()
 
-    # Modo predominante = el más frecuente entre los mensajes de la sesión.
-    # (La detección real del modo por mensaje llega en el #82; por ahora se usa
-    # el modo derivado del nivel.)
+    # Modo predominante = el más frecuente entre los mensajes de la sesión,
+    # ya con el tipo real diagnosticado por el LLM en cada turno (#82).
     filas = (
         db.query(ChatMensaje.modo_detectado)
         .filter(ChatMensaje.sesion_id == sesion.id)
@@ -902,12 +909,6 @@ async def chat(
 
     verificar_frecuencia(f"user:{usuario.id}")
 
-    if nivel not in NIVEL_A_MODO:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Nivel '{nivel}' no válido. Valores válidos: {list(NIVEL_A_MODO)}"
-        )
-
     try:
         netlist_dict = json.loads(netlist)
     except json.JSONDecodeError:
@@ -931,15 +932,12 @@ async def chat(
         if sesion is None:
             raise HTTPException(status_code=404, detail="Sesión no encontrada.")
 
-    modo = NIVEL_A_MODO[nivel]
-
     estado = {
         "imagen_base64": "",
         "mime_type": "",
         "proveedor": proveedor,
         "proveedor_razon": proveedor_razon,
         "api_key_razon": api_key_razon_efectiva,
-        "modo_interaccion": modo,
         "nivel": normalizar_nivel(nivel),
         "historial_chat": historial_list,
         "extractor_intento": 0,
@@ -974,6 +972,9 @@ async def chat(
             return
 
         intencion = resultado.get("intencion_detectada", "responder")
+        # Diagnosticado por el clasificador del chat en esta misma llamada al
+        # LLM (#82, ver agents/chat_agent_v2.py) — nunca derivado del nivel.
+        tipo_interaccion = resultado.get("tipo_interaccion_detectado", "UNDER")
 
         # Todo el trabajo de /chat (clasificar, modificar, responder) es
         # razonamiento sobre texto — no hay imagen en esta ruta — así que se
@@ -989,12 +990,14 @@ async def chat(
             yield _evento_sse("respuesta", {
                 "contenido": resultado.get("respuesta", ""),
                 "intencion_detectada": intencion,
+                "tipo_interaccion_detectado": tipo_interaccion,
                 "uso": resultado.get("uso", {}),
             })
         else:
             yield _evento_sse("actualizado", {
                 "respuesta": resultado.get("respuesta", ""),
                 "intencion_detectada": intencion,
+                "tipo_interaccion_detectado": tipo_interaccion,
                 "instrucciones_actualizadas": resultado.get("instrucciones_actualizadas"),
                 "netlist_modificado": resultado.get("netlist_modificado"),
                 "posiciones_modificadas": resultado.get("posiciones_modificadas"),
@@ -1005,7 +1008,7 @@ async def chat(
         # fallo al guardar no debe romper la respuesta ya enviada al usuario.
         if sesion is not None:
             try:
-                _persistir_interaccion_chat(db, sesion, historial_list, resultado, modo, intencion)
+                _persistir_interaccion_chat(db, sesion, historial_list, resultado, tipo_interaccion, intencion)
             except Exception:
                 db.rollback()
 

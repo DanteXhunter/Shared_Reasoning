@@ -41,5 +41,13 @@ export type Sesion = {
   // (① /analizar extractor, ② /planificar) más una lista con cada interacción
   // del chat. Alimenta la pestaña "Métricas" y sobrevive a recargar/reabrir la
   // sesión. Ausente en sesiones de ejemplo (no pasaron por el backend).
-  metricasProceso?: { extractor?: Uso; planner?: Uso; chat?: { uso: Uso; intencion: string }[] }
+  metricasProceso?: {
+    extractor?: Uso
+    planner?: Uso
+    chat?: { uso: Uso; intencion: string; tipo_interaccion?: string }[]
+    // Tipo de interacción (IN/ON/OVER/UNDER/ALONG) diagnosticado por el LLM
+    // para la interacción #1 de la sesión (#82) — el análisis inicial cuenta
+    // como una interacción más, no solo los turnos del chat.
+    tipoInteraccionInicial?: string
+  }
 }

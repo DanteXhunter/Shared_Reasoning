@@ -170,9 +170,10 @@ function TarjetaAgente({ etiqueta, uso }: { etiqueta: string; uso?: Uso }) {
 // Consumo real reportado por el backend en cada llamada (agents/estado.py
 // MetricasAgente) — no se inventa nada aquí, solo se muestra bonito. La corrida
 // inicial viene de Bienvenida.tsx; cada turno del chat se acumula en vivo.
-function PanelMetricas({ metricasProceso, usoChat }: { metricasProceso?: Sesion['metricasProceso']; usoChat: { uso: Uso; intencion: string }[] }) {
+function PanelMetricas({ metricasProceso, usoChat }: { metricasProceso?: Sesion['metricasProceso']; usoChat: { uso: Uso; intencion: string; tipo_interaccion?: string }[] }) {
   const extractor = metricasProceso?.extractor
   const planner = metricasProceso?.planner
+  const tipoInteraccionInicial = metricasProceso?.tipoInteraccionInicial
   const todos = [extractor, planner, ...usoChat.map((u) => u.uso)].filter((u): u is Uso => Boolean(u))
   const totalTokens = todos.reduce((acc, u) => acc + (u.tokens_total ?? 0), 0)
   const totalTiempo = todos.reduce((acc, u) => acc + (u.tiempo_segundos ?? 0), 0)
@@ -184,6 +185,30 @@ function PanelMetricas({ metricasProceso, usoChat }: { metricasProceso?: Sesion[
       </div>
     )
   }
+
+  // Historial unificado (#82/#95): la interacción 1 es SIEMPRE el análisis
+  // inicial (extractor + planner combinados) — no tiene "intención" de chat
+  // porque ese eje todavía no aplica, pero sí tiene tipo de interacción
+  // diagnosticado. De ahí en adelante, cada turno del chat suma una fila.
+  const historial: { numero: number; intencion: string | null; tipoInteraccion?: string; tokens: number; tiempo?: number }[] = []
+  if (extractor || planner) {
+    historial.push({
+      numero: 1,
+      intencion: null,
+      tipoInteraccion: tipoInteraccionInicial,
+      tokens: (extractor?.tokens_total ?? 0) + (planner?.tokens_total ?? 0),
+      tiempo: (extractor?.tiempo_segundos ?? 0) + (planner?.tiempo_segundos ?? 0),
+    })
+  }
+  usoChat.forEach(({ uso, intencion, tipo_interaccion }) => {
+    historial.push({
+      numero: historial.length + 1,
+      intencion,
+      tipoInteraccion: tipo_interaccion,
+      tokens: uso.tokens_total ?? 0,
+      tiempo: uso.tiempo_total_segundos ?? uso.tiempo_segundos,
+    })
+  })
 
   return (
     <div className="absolute inset-0 overflow-y-auto p-5 flex flex-col gap-5">
@@ -201,26 +226,28 @@ function PanelMetricas({ metricasProceso, usoChat }: { metricasProceso?: Sesion[
         </div>
       </div>
 
-      {usoChat.length > 0 && (
+      {historial.length > 0 && (
         <div>
-          <h3 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: 'var(--ink-soft)' }}>Interacciones del chat</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-widest mb-2" style={{ color: 'var(--ink-soft)' }}>Historial de interacciones</h3>
           <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--border)' }}>
             <table className="w-full text-sm">
               <thead>
                 <tr style={{ background: 'var(--bg2)' }}>
+                  <th className="text-left font-semibold px-3 py-2" style={{ color: 'var(--ink-soft)' }}>#</th>
                   <th className="text-left font-semibold px-3 py-2" style={{ color: 'var(--ink-soft)' }}>Intención</th>
-                  <th className="text-left font-semibold px-3 py-2" style={{ color: 'var(--ink-soft)' }}>Modelo</th>
+                  <th className="text-left font-semibold px-3 py-2" style={{ color: 'var(--ink-soft)' }}>Tipo de interacción</th>
                   <th className="text-right font-semibold px-3 py-2" style={{ color: 'var(--ink-soft)' }}>Tokens</th>
                   <th className="text-right font-semibold px-3 py-2" style={{ color: 'var(--ink-soft)' }}>Tiempo</th>
                 </tr>
               </thead>
               <tbody>
-                {usoChat.map(({ uso, intencion }, i) => (
-                  <tr key={i} style={{ borderTop: '1px solid var(--border)', background: 'var(--bg1)' }}>
-                    <td className="px-3 py-2">{ETIQUETA_INTENCION[intencion] ?? intencion}</td>
-                    <td className="px-3 py-2 font-mono text-xs">{uso.modelo_activo ?? '—'}</td>
-                    <td className="px-3 py-2 text-right">{formatNum(uso.tokens_total)}</td>
-                    <td className="px-3 py-2 text-right">{formatSeg(uso.tiempo_total_segundos ?? uso.tiempo_segundos)}</td>
+                {historial.map((fila) => (
+                  <tr key={fila.numero} style={{ borderTop: '1px solid var(--border)', background: 'var(--bg1)' }}>
+                    <td className="px-3 py-2" style={{ color: 'var(--ink-soft)' }}>{fila.numero}</td>
+                    <td className="px-3 py-2">{fila.intencion ? (ETIQUETA_INTENCION[fila.intencion] ?? fila.intencion) : 'Análisis inicial'}</td>
+                    <td className="px-3 py-2 font-mono text-xs">{fila.tipoInteraccion ?? '—'}</td>
+                    <td className="px-3 py-2 text-right">{formatNum(fila.tokens)}</td>
+                    <td className="px-3 py-2 text-right">{formatSeg(fila.tiempo)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -248,7 +275,7 @@ function VistaPrincipal({
   // Consumo de cada turno del chat (tokens/tiempo/modelo) — ver pestaña
   // "Métricas". Se siembra con lo ya persistido en la sesión (al reabrirla del
   // historial) y se sigue acumulando en vivo desde ahí.
-  const [usoChat, setUsoChat] = useState<{ uso: Uso; intencion: string }[]>(
+  const [usoChat, setUsoChat] = useState<{ uso: Uso; intencion: string; tipo_interaccion?: string }[]>(
     () => sesion.metricasProceso?.chat ?? [],
   )
   const [chatAbierto, setChatAbierto] = useState(true)
@@ -306,7 +333,10 @@ function VistaPrincipal({
   }
 
   const instruccionActiva = instrucciones.find((i) => i.numero === paso)
-  const interacciones = mensajes.filter((m) => m.de === 'tu').length
+  // Interacción 1 = subir el esquemático y generar el plan (cuenta si hay
+  // netlist, es decir, si sí pasó por el análisis real) — las sesiones de
+  // ejemplo sin netlist no suman esta primera interacción.
+  const interacciones = (sesion.netlist ? 1 : 0) + mensajes.filter((m) => m.de === 'tu').length
 
   // Cronómetro de la sesión — aproximación de "Tiempo" del mockup.
   useEffect(() => {
@@ -607,7 +637,7 @@ function VistaPrincipal({
                 setInstrucciones(nuevas)
                 setPaso(1)
               }}
-              onUso={(uso, intencion) => setUsoChat((u) => [...u, { uso, intencion }])}
+              onUso={(uso, intencion, tipoInteraccion) => setUsoChat((u) => [...u, { uso, intencion, tipo_interaccion: tipoInteraccion }])}
             />
           )}
         </aside>
