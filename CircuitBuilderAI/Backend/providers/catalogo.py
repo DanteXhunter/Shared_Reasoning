@@ -278,6 +278,16 @@ def _ocultar_keys(texto: str) -> str:
     return _PATRON_API_KEY.sub("[REDACTED]", texto)
 
 
+def es_error_freetier(e: Exception) -> bool:
+    """Señal confirmada de que el proveedor rechazó la llamada por falta de
+    facturación real (cuota de cortesía agotada) — ver
+    providers/disponibilidad_usuario.py. Usada para marcar de forma
+    permanente, tras un uso real, que la key propia de un usuario no tiene
+    facturación (ver Usuario.sin_facturacion_confirmada en db/models.py)."""
+    plano = str(e).lower().replace("_", "").replace("-", "")
+    return "freetier" in plano
+
+
 def mensaje_rate_limit(proveedor: str, modelo: str, e: Exception) -> tuple[str, str]:
     """Traduce un 429 del proveedor a una causa concreta.
 

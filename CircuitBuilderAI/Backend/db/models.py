@@ -28,6 +28,12 @@ class Usuario(Base):
     # plano ni se devuelve al front; solo se exponen flags booleanos de "está
     # configurada" (ver auth.ApiKeysConfiguradas).
     api_keys_cifradas = Column(Text, nullable=True)
+    # {"gemini": true} cuando un uso REAL con la key propia de ese proveedor
+    # confirmó el 429 "FreeTier" (ver providers.catalogo.es_error_freetier) —
+    # es la única señal fiable de falta de facturación para Gemini, porque el
+    # listado de /models no la distingue (ver disponibilidad_usuario.py).
+    # NULL/ausente = aún no se sabe (se muestra "sin verificar" en el selector).
+    sin_facturacion_confirmada = Column(JSONB, nullable=True)
     fecha_registro = Column(DateTime(timezone=True), server_default=func.now())
 
 
