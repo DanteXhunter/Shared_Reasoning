@@ -104,14 +104,20 @@ class _DSU:
             self.parent[ra] = rb
 
 
-def construir_nets(netlist: dict) -> tuple[list[dict], list[str]]:
+def construir_nets(netlist: dict) -> tuple[list[dict], list[dict]]:
     """
     Agrupa todos los endpoints (pines de componentes y nodos con nombre) en nets.
     Cada net: {"tipo": "positivo"|"negativo"|"senal", "pines": [(comp_id, pin)], "nodos": [nombre]}
+
+    Devuelve además los avisos encontrados al recorrer el netlist, cada uno
+    {"grave": bool, "mensaje": str}. Los GRAVES significan que el netlist está
+    mal formado (apunta a algo que no existe) y que los nets resultantes no son
+    confiables — quien llame debe rebotarlos, no seguir de largo. Ver
+    avisos_graves() y su uso en extractor_agent.nodo_validar.
     """
     componentes = netlist.get("componentes", [])
     comp_by_id = {c["id"]: c for c in componentes}
-    avisos: list[str] = []
+    avisos: list[dict] = []
     dsu = _DSU()
 
     def canon(ref: str):
@@ -120,13 +126,25 @@ def construir_nets(netlist: dict) -> tuple[list[dict], list[str]]:
             comp_id, pin_ref = ref.split(".", 1)
             comp = comp_by_id.get(comp_id)
             if comp is None:
-                avisos.append(f"'{ref}': el componente '{comp_id}' no existe en el netlist; se trata como nodo suelto.")
+                ids = ", ".join(c["id"] for c in componentes) or "(ninguno)"
+                avisos.append({"grave": True, "mensaje": (
+                    f"La conexión '{ref}' apunta al componente '{comp_id}', que NO existe en tu lista "
+                    f"de componentes (los que declaraste son: {ids}). O te faltó declarar '{comp_id}' "
+                    f"como componente, o esa conexión no existe en el esquemático y la inventaste. "
+                    f"Vuelve a mirar la imagen y corrige: cada referencia de 'conexiones' debe apuntar "
+                    f"a un componente que esté en 'componentes'."
+                )})
                 return ("nodo", _norm(ref))
             pin_real = resolver_pin(comp, pin_ref)
             if pin_real is None:
                 pines = comp.get("pines", [])
                 pin_real = pines[0]["nombre"] if pines else pin_ref
-                avisos.append(f"'{ref}': pin '{pin_ref}' no encontrado en {comp_id}; se usó '{pin_real}'.")
+                nombres = ", ".join(p.get("nombre", "") for p in pines) or "(ninguno)"
+                avisos.append({"grave": True, "mensaje": (
+                    f"La conexión '{ref}' apunta al pin '{pin_ref}', que no existe en {comp_id} "
+                    f"(sus pines son: {nombres}). Usa uno de los nombres de pin que declaraste "
+                    f"para ese componente."
+                )})
             return ("pin", comp_id, pin_real)
         return ("nodo", _norm(ref))
 
@@ -168,11 +186,19 @@ def construir_nets(netlist: dict) -> tuple[list[dict], list[str]]:
             if net is not None:
                 net["tipo"] = "positivo" if es_pin_positivo(p) else "negativo"
 
-    # Avisos de salud del circuito: pines que no conectan con nada.
+    # Avisos de salud del circuito: pines que no conectan con nada. NO son
+    # graves — un pin al aire puede ser legítimo (el terminal libre de un
+    # interruptor, un punto de medición), así que se informan sin bloquear.
     ids_fuente = {c["id"] for c in componentes if es_fuente(c)}
     for net in nets:
         if net["tipo"] == "senal" and len(net["pines"]) == 1 and not net["nodos"]:
             cid, pin = net["pines"][0]
             if cid not in ids_fuente:
-                avisos.append(f"Pin flotante: {cid}.{pin} no conecta con nada.")
+                avisos.append({"grave": False, "mensaje": f"Pin flotante: {cid}.{pin} no conecta con nada."})
     return nets, avisos
+
+
+def avisos_graves(avisos: list[dict]) -> list[str]:
+    """Los avisos que invalidan el netlist (referencias a componentes o pines
+    que no existen), como texto listo para devolverle al LLM en un reintento."""
+    return [a["mensaje"] for a in avisos if a["grave"]]

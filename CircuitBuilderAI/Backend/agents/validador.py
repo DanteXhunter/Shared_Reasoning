@@ -47,6 +47,39 @@ def fisica_de_hueco(fila, columna) -> tuple:
     return ("invalido", fila, col)
 
 
+def _validar_inventario(netlist: dict, instrucciones: list[dict]) -> list[str]:
+    """
+    El armado debe usar EXACTAMENTE las piezas del netlist: ni una de más, ni
+    una de menos.
+
+    El resto de este módulo solo mira la física (huecos, nodos, cortos), y una
+    pieza inventada puede ser físicamente inofensiva — colocada en una fila
+    libre no cortocircuita nada, así que pasaba la validación entera sin que
+    nadie la cuestionara. La comparación de inventario es lo único que la
+    detecta, y es la que impide que el planner "se tome libertades".
+    """
+    del_netlist = {c["id"] for c in netlist.get("componentes", [])}
+    del_armado = {
+        ins.get("componente_id")
+        for ins in instrucciones
+        if ins.get("tipo") == "colocar_componente" and ins.get("componente_id")
+    }
+
+    errores: list[str] = []
+    for sobra in sorted(del_armado - del_netlist):
+        errores.append(
+            f"Componente inventado: colocaste '{sobra}', que NO existe en el netlist. "
+            f"Arma únicamente estas piezas: {', '.join(sorted(del_netlist))}. "
+            f"Elimina el paso que coloca '{sobra}' y cualquier cable que lo use."
+        )
+    for falta in sorted(del_netlist - del_armado):
+        errores.append(
+            f"Componente omitido: '{falta}' está en el netlist pero no lo colocaste en ningún paso. "
+            f"Agrega su paso 'colocar_componente' con todas sus patas."
+        )
+    return errores
+
+
 def validar_instrucciones(netlist: dict, instrucciones: list[dict]) -> list[str]:
     """
     Verifica una propuesta de armado contra la física real del circuito.
@@ -54,6 +87,10 @@ def validar_instrucciones(netlist: dict, instrucciones: list[dict]) -> list[str]
     """
     errores: list[str] = []
     nets, _ = construir_nets(netlist)
+
+    errores += _validar_inventario(netlist, instrucciones)
+    if errores:
+        return errores  # sobran o faltan piezas — comparar la física no aporta nada
 
     parent: dict = {}
     pin_a_hueco: dict = {}
