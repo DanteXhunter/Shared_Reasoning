@@ -7,11 +7,12 @@ export type MensajeHistorial = { rol: 'user' | 'assistant'; contenido: string }
 
 export type EventoChat =
   | { tipo: 'estado'; mensaje: string }
-  | { tipo: 'respuesta'; contenido: string; intencion_detectada: string; uso?: Uso }
+  | { tipo: 'respuesta'; contenido: string; intencion_detectada: string; tipo_interaccion_detectado?: string; uso?: Uso }
   | {
       tipo: 'actualizado'
       respuesta: string
       intencion_detectada: string
+      tipo_interaccion_detectado?: string
       instrucciones_actualizadas: Instruccion[] | null
       netlist_modificado: Netlist | null
       posiciones_modificadas: Record<string, number> | null

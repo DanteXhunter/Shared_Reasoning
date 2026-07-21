@@ -119,13 +119,24 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
 
       // Métricas del análisis inicial — se persisten con la sesión para que la
       // pestaña "Métricas" no se pierda al recargar o reabrir del historial.
-      const metricasProceso = { extractor: analisis.uso, planner: plan.uso }
+      const metricasProceso = {
+        extractor: analisis.uso,
+        planner: plan.uso,
+        tipoInteraccionInicial: plan.tipo_interaccion_inicial,
+      }
 
       // Persistimos la sesión (#73) para que aparezca en el historial. Si falla,
       // seguimos sin id: el workspace funciona igual, solo no se guardará.
       let id: string | undefined
       try {
-        id = await crearSesion({ nombre, netlist: analisis.resultado, instrucciones: plan.instrucciones, imagenEsquema, metricas: metricasProceso })
+        id = await crearSesion({
+          nombre,
+          netlist: analisis.resultado,
+          instrucciones: plan.instrucciones,
+          imagenEsquema,
+          metricas: metricasProceso,
+          modo: plan.tipo_interaccion_inicial,
+        })
       } catch {
         id = undefined
       }
