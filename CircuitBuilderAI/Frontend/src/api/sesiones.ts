@@ -20,7 +20,12 @@ type SesionResumenAPI = { id: string; nombre: string; fecha: string | null; modo
 export type MetricasSesion = {
   extractor?: Uso
   planner?: Uso
-  chat?: { uso: Uso; intencion: string }[]
+  // tipo_interaccion: IN/ON/OVER/UNDER/ALONG diagnosticado por el LLM (#82) —
+  // eje distinto de `intencion` (qué acción de chat pidió el usuario).
+  chat?: { uso: Uso; intencion: string; tipo_interaccion?: string }[]
+  // Tipo de interacción diagnosticado para la interacción #1 (el análisis
+  // inicial, antes de cualquier turno de chat) — ver Bienvenida.tsx.
+  tipoInteraccionInicial?: string
 }
 
 type SesionCompletaAPI = {
@@ -46,6 +51,10 @@ export async function crearSesion(datos: {
   // Métricas del análisis inicial (extractor + planner) para que la pestaña
   // "Métricas" sobreviva a recargar o reabrir la sesión desde el historial.
   metricas?: MetricasSesion
+  // Tipo de interacción diagnosticado por el LLM para la primera interacción
+  // de la sesión (#82, viene de RespuestaPlanner.tipo_interaccion_inicial) —
+  // nunca un default fijo ni derivado del nivel.
+  modo?: string
 }): Promise<string> {
   const res = await fetchAutenticado(`${API_URL}/sesiones`, {
     method: 'POST',
@@ -54,7 +63,7 @@ export async function crearSesion(datos: {
       nombre: datos.nombre,
       netlist: datos.netlist,
       instrucciones: datos.instrucciones,
-      modo: null,
+      modo: datos.modo ?? null,
       metricas: datos.metricas ?? null,
       imagen_esquema: datos.imagenEsquema ?? null,
     }),

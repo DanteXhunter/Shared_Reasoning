@@ -101,6 +101,9 @@ export type RespuestaPlanner = {
   mensaje?: string
   uso?: Uso
   metricas?: Record<string, unknown>
+  // Tipo de interacción (IN/ON/OVER/UNDER/ALONG) diagnosticado por el LLM para
+  // la primera interacción de la sesión (#82) — nunca un default fijo.
+  tipo_interaccion_inicial?: string
 }
 
 // Un nodo (net con nombre: V_in, V_out, GND, VCC...) colocado en píxeles.
