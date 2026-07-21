@@ -17,7 +17,7 @@ import { calcularBandas } from '../circuit/resistorColorCode'
 import { boardSize } from '../circuit/grid'
 import type { Sesion } from './tipos'
 import type { Instruccion, Netlist, Uso } from '../circuit/types'
-import { abrirSesion, compartirSesion } from '../api/sesiones'
+import { abrirSesion, compartirSesion, finalizarSesion } from '../api/sesiones'
 import { useHistorialSesiones, BuscadorHistorial, ItemHistorial, ToastHistorial } from './HistorialSesiones'
 import type { Usuario } from '../api/auth'
 
@@ -199,7 +199,13 @@ function TarjetaAgente({ etiqueta, uso }: { etiqueta: string; uso?: Uso }) {
 // Consumo real reportado por el backend en cada llamada (agents/estado.py
 // MetricasAgente) — no se inventa nada aquí, solo se muestra bonito. La corrida
 // inicial viene de Bienvenida.tsx; cada turno del chat se acumula en vivo.
-function PanelMetricas({ metricasProceso, usoChat }: { metricasProceso?: Sesion['metricasProceso']; usoChat: { uso: Uso; intencion: string; tipo_interaccion?: string }[] }) {
+function PanelMetricas({ metricasProceso, usoChat, resumenSesion }: {
+  metricasProceso?: Sesion['metricasProceso']
+  usoChat: { uso: Uso; intencion: string; tipo_interaccion?: string }[]
+  // Solo viene cuando el usuario ya le dio a "Finalizar" (temporizador
+  // inicio/fin) — tiempo total y tiempo por paso medidos en vivo.
+  resumenSesion?: { tiempoTotal: number; tiempoPorPaso: Record<number, number>; totalPasos: number }
+}) {
   const extractor = metricasProceso?.extractor
   const planner = metricasProceso?.planner
   const tipoInteraccionInicial = metricasProceso?.tipoInteraccionInicial
@@ -250,6 +256,25 @@ function PanelMetricas({ metricasProceso, usoChat }: { metricasProceso?: Sesion[
 
   return (
     <div className="absolute inset-0 overflow-y-auto p-5 flex flex-col gap-5">
+      {/* Resumen amigable al finalizar (#temporizador) — arriba de todo, es
+          lo primero que le importa a quien acaba de terminar la sesión. El
+          detalle técnico (tokens, modelo) sigue abajo para quien lo quiera. */}
+      {resumenSesion && (
+        <div className="rounded-xl p-4 flex flex-col gap-3" style={{ background: 'color-mix(in srgb, var(--accent) 10%, transparent)', border: '1px solid var(--accent)' }}>
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-bold" style={{ color: 'var(--accent)' }}>Sesión finalizada</span>
+            <span className="text-sm font-semibold">{formatTiempo(resumenSesion.tiempoTotal)} · {resumenSesion.totalPasos} pasos</span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {Array.from({ length: resumenSesion.totalPasos }, (_, i) => i + 1).map((n) => (
+              <span key={n} className="text-xs font-mono px-2 py-1 rounded-lg" style={{ background: 'var(--bg1)' }}>
+                #{n} {formatSeg(resumenSesion.tiempoPorPaso[n])}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-3 gap-3">
         <TarjetaResumen titulo="Tokens totales" valor={formatNum(totalTokens)} />
         <TarjetaResumen titulo="Tiempo acumulado" valor={formatSeg(totalTiempo)} />
@@ -338,6 +363,21 @@ function VistaPrincipal({
     ],
   )
   const [tiempo, setTiempo] = useState(0)
+  // Temporizador inicio/fin: antes de "Iniciar" el cronómetro no corre y no
+  // se mide tiempo por paso — lo decide el usuario, no arranca solo al abrir
+  // la sesión. "Finalizar" lo congela y persiste el resumen (#temporizador).
+  const [iniciado, setIniciado] = useState(false)
+  const [finalizado, setFinalizado] = useState(false)
+  const [guardandoFinal, setGuardandoFinal] = useState(false)
+  const [tiempoPorPaso, setTiempoPorPaso] = useState<Record<number, number>>({})
+  // En qué paso está "el cronómetro" ahora mismo y desde cuándo — distinto de
+  // `paso`: durante el barrido animado de irAPaso, `paso` cambia varias veces
+  // por puro tránsito visual, pero el tiempo-por-paso solo debe cerrarse/
+  // abrirse UNA vez por navegación real (salida → llegada), nunca por cada
+  // frame intermedio del barrido.
+  const marcaPasoRef = useRef<{ paso: number; desde: number }>({ paso: 1, desde: Date.now() })
+  const inicioRef = useRef<string | null>(null)
+  const animandoRef = useRef<number | null>(null)
   // Compartir esta sesión por link (ver ImportarCompartido.tsx + main.py).
   const [compartiendo, setCompartiendo] = useState(false)
   const [linkCopiado, setLinkCopiado] = useState(false)
@@ -381,11 +421,107 @@ function VistaPrincipal({
   // ejemplo sin netlist no suman esta primera interacción.
   const interacciones = (sesion.netlist ? 1 : 0) + mensajes.filter((m) => m.de === 'tu').length
 
-  // Cronómetro de la sesión — aproximación de "Tiempo" del mockup.
+  // Cronómetro de la sesión — solo corre entre "Iniciar" y "Finalizar".
   useEffect(() => {
+    if (!iniciado || finalizado) return
     const id = setInterval(() => setTiempo((t) => t + 1), 1000)
     return () => clearInterval(id)
+  }, [iniciado, finalizado])
+
+  // Limpia el intervalo del barrido animado si el componente se desmonta a
+  // mitad de una animación (ej. el usuario cambia de sesión).
+  useEffect(() => () => {
+    if (animandoRef.current) clearInterval(animandoRef.current)
   }, [])
+
+  // Cierra el tramo de tiempo del paso en el que estaba "el cronómetro"
+  // (marcaPasoRef) y lo acumula en tiempoPorPaso. No hace nada si el
+  // temporizador no está corriendo (sin iniciar, o ya finalizado) — antes de
+  // "Iniciar" no se mide nada, a propósito.
+  function cerrarPasoActual() {
+    if (!iniciado || finalizado) return
+    const ahora = Date.now()
+    const { paso: pasoAnterior, desde } = marcaPasoRef.current
+    const segundos = (ahora - desde) / 1000
+    setTiempoPorPaso((t) => ({ ...t, [pasoAnterior]: (t[pasoAnterior] ?? 0) + segundos }))
+  }
+
+  // Registra una navegación — se llama UNA vez por acción (click en flecha,
+  // tecla, o el destino final de un barrido), nunca por cada paso intermedio
+  // que el barrido atraviesa visualmente. marcaPasoRef.current.paso sigue la
+  // posición real SIEMPRE (incluso antes de "Iniciar", para que teclado/
+  // flechas no se queden pegados) — lo que sí depende del temporizador es si
+  // ese tramo se acumula como tiempo real (cerrarPasoActual ya lo filtra).
+  function marcarTiempoAntes(destino: number) {
+    if (destino === marcaPasoRef.current.paso) return
+    cerrarPasoActual()
+    marcaPasoRef.current = { paso: destino, desde: Date.now() }
+  }
+
+  // Salto a un paso — animado (barrido por los pasos intermedios) si el
+  // destino no es adyacente al actual, directo si sí lo es. La navegación
+  // adyacente (flechas, teclado) no pasa por acá: ahí un salto directo ya es
+  // instantáneo y animarlo se sentiría con retraso.
+  function irAPaso(destino: number) {
+    const objetivo = Math.max(1, Math.min(total, destino))
+    if (animandoRef.current) {
+      clearInterval(animandoRef.current)
+      animandoRef.current = null
+    }
+    marcarTiempoAntes(objetivo)
+    if (Math.abs(objetivo - paso) <= 1) {
+      setPaso(objetivo)
+      return
+    }
+    const direccion = objetivo > paso ? 1 : -1
+    animandoRef.current = window.setInterval(() => {
+      setPaso((p) => {
+        const siguiente = p + direccion
+        if (siguiente === objetivo && animandoRef.current) {
+          clearInterval(animandoRef.current)
+          animandoRef.current = null
+        }
+        return siguiente
+      })
+    }, 45)
+  }
+
+  function iniciarSesion() {
+    setIniciado(true)
+    // marcaPasoRef.current.paso ya sigue la posición real (ver
+    // marcarTiempoAntes) — solo hace falta resetear el reloj a este momento
+    // para no contarle a este paso el tiempo de navegar ANTES de arrancar.
+    marcaPasoRef.current = { paso: marcaPasoRef.current.paso, desde: Date.now() }
+    inicioRef.current = new Date().toISOString()
+  }
+
+  async function finalizar() {
+    const ahora = Date.now()
+    const { paso: pasoActual, desde } = marcaPasoRef.current
+    const segundos = (ahora - desde) / 1000
+    const tiempoFinal = { ...tiempoPorPaso, [pasoActual]: (tiempoPorPaso[pasoActual] ?? 0) + segundos }
+    setTiempoPorPaso(tiempoFinal)
+    setFinalizado(true)
+
+    if (sesion.id) {
+      setGuardandoFinal(true)
+      try {
+        await finalizarSesion(sesion.id, {
+          tiempoTotalSegundos: tiempo,
+          tiempoPorPaso: tiempoFinal,
+          inicio: inicioRef.current,
+          fin: new Date().toISOString(),
+        })
+      } catch {
+        // Si falla el guardado, el resumen se sigue mostrando igual — solo
+        // no sobrevive a recargar la página. No vale la pena bloquear al
+        // usuario por esto.
+      } finally {
+        setGuardandoFinal(false)
+      }
+    }
+    setTab('metricas')
+  }
 
   // Layout del circuito según el paso activo (o completo si revelado está apagado).
   const { componentes, cables, baterias } = useMemo(
@@ -469,12 +605,22 @@ function VistaPrincipal({
   }, [])
 
   // Navegación de pasos con el teclado (← →), salvo al escribir en un input.
+  // Usa marcaPasoRef (no el estado `paso`, que puede quedar obsoleto en este
+  // closure) como fuente de la posición actual para el tiempo por paso.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const t = (e.target as HTMLElement)?.tagName
       if (t === 'INPUT' || t === 'TEXTAREA') return
-      if (e.key === 'ArrowLeft') setPaso((p) => Math.max(1, p - 1))
-      if (e.key === 'ArrowRight') setPaso((p) => Math.min(total, p + 1))
+      if (e.key === 'ArrowLeft') {
+        const destino = Math.max(1, marcaPasoRef.current.paso - 1)
+        marcarTiempoAntes(destino)
+        setPaso(destino)
+      }
+      if (e.key === 'ArrowRight') {
+        const destino = Math.min(total, marcaPasoRef.current.paso + 1)
+        marcarTiempoAntes(destino)
+        setPaso(destino)
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -678,6 +824,7 @@ function VistaPrincipal({
               nivel={sesion.nivel}
               onInstruccionesActualizadas={(nuevas) => {
                 setInstrucciones(nuevas)
+                marcarTiempoAntes(1)
                 setPaso(1)
               }}
               onUso={(uso, intencion, tipoInteraccion) => setUsoChat((u) => [...u, { uso, intencion, tipo_interaccion: tipoInteraccion }])}
@@ -697,7 +844,11 @@ function VistaPrincipal({
             ) : tab === 'codigo' ? (
               <PanelCodigo netlist={sesion.netlist} instrucciones={instrucciones} />
             ) : tab === 'metricas' ? (
-              <PanelMetricas metricasProceso={sesion.metricasProceso} usoChat={usoChat} />
+              <PanelMetricas
+                metricasProceso={sesion.metricasProceso}
+                usoChat={usoChat}
+                resumenSesion={finalizado ? { tiempoTotal: tiempo, tiempoPorPaso, totalPasos: total } : undefined}
+              />
             ) : sesion.imagenEsquema ? (
               <img
                 src={sesion.imagenEsquema}
@@ -740,10 +891,42 @@ function VistaPrincipal({
 
         {/* ============ PANEL DERECHO: DETALLE DEL PASO ============ */}
         <aside className="w-96 shrink-0 flex flex-col p-5 gap-5 overflow-y-auto" style={{ borderLeft: '1px solid var(--border)' }}>
+          {/* Temporizador: el usuario decide cuándo arranca el cronómetro
+              ("Iniciar") y cuándo termina ("Finalizar", solo disponible en el
+              último paso) — no corre solo al abrir la sesión. */}
+          {!iniciado && (
+            <button
+              onClick={iniciarSesion}
+              className="w-full py-2.5 rounded-xl font-semibold text-sm transition hover:opacity-90"
+              style={{ background: 'var(--accent)', color: 'var(--bg2)' }}
+            >
+              Iniciar
+            </button>
+          )}
+          {iniciado && !finalizado && paso === total && (
+            <button
+              onClick={finalizar}
+              disabled={guardandoFinal}
+              className="w-full py-2.5 rounded-xl font-semibold text-sm transition hover:opacity-90 disabled:opacity-60"
+              style={{ background: 'var(--accent)', color: 'var(--bg2)' }}
+            >
+              {guardandoFinal ? 'Guardando…' : 'Finalizar'}
+            </button>
+          )}
+          {finalizado && (
+            <div className="w-full py-2.5 rounded-xl font-semibold text-sm text-center" style={{ background: 'var(--bg1)', color: 'var(--ink-soft)' }}>
+              Sesión finalizada — {formatTiempo(tiempo)}
+            </div>
+          )}
+
           {/* Navegación de paso */}
           <div className="flex items-center justify-center gap-3">
             <button
-              onClick={() => setPaso((p) => Math.max(1, p - 1))}
+              onClick={() => {
+                const destino = Math.max(1, marcaPasoRef.current.paso - 1)
+                marcarTiempoAntes(destino)
+                setPaso(destino)
+              }}
               disabled={paso <= 1}
               className="grid place-items-center w-8 h-8 rounded-lg disabled:opacity-30 transition"
               style={{ background: 'var(--bg1)' }}
@@ -755,7 +938,11 @@ function VistaPrincipal({
               Paso {paso} <span style={{ color: 'var(--ink-soft)' }}>de {total}</span>
             </span>
             <button
-              onClick={() => setPaso((p) => Math.min(total, p + 1))}
+              onClick={() => {
+                const destino = Math.min(total, marcaPasoRef.current.paso + 1)
+                marcarTiempoAntes(destino)
+                setPaso(destino)
+              }}
               disabled={paso >= total}
               className="grid place-items-center w-8 h-8 rounded-lg disabled:opacity-30 transition"
               style={{ background: 'var(--bg1)' }}
@@ -766,13 +953,23 @@ function VistaPrincipal({
           </div>
           <div className="flex items-center justify-center gap-1.5">
             {instrucciones.map((ins) => (
-              <button
-                key={ins.numero}
-                onClick={() => setPaso(ins.numero)}
-                className="w-2 h-2 rounded-full transition"
-                style={{ background: ins.numero <= paso ? 'var(--accent)' : 'var(--border)' }}
-                title={`Paso ${ins.numero}`}
-              />
+              <div key={ins.numero} className="relative group py-2">
+                <button
+                  onClick={() => irAPaso(ins.numero)}
+                  aria-label={`Paso ${ins.numero}`}
+                  className="block w-2 h-2 rounded-full transition-transform duration-150 ease-out group-hover:scale-[2.5]"
+                  style={{ background: ins.numero <= paso ? 'var(--accent)' : 'var(--border)' }}
+                />
+                {/* Tooltip tipo "zoom": aparece con un pop al pasar el mouse
+                    encima del punto, en vez del tooltip nativo del navegador
+                    (lento y sin animación). */}
+                <span
+                  className="pointer-events-none absolute -top-1 left-1/2 -translate-x-1/2 -translate-y-full scale-50 opacity-0 group-hover:scale-100 group-hover:opacity-100 transition-all duration-150 ease-out text-[10px] font-semibold px-2 py-1 rounded-lg whitespace-nowrap shadow"
+                  style={{ background: 'var(--accent)', color: 'var(--bg2)' }}
+                >
+                  Paso {ins.numero}
+                </span>
+              </div>
             ))}
           </div>
 

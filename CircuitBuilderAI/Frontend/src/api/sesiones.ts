@@ -103,6 +103,28 @@ export async function renombrarSesion(id: string, nombre: string): Promise<void>
   if (!res.ok) throw new Error('No se pudo renombrar la conversación.')
 }
 
+// Guarda el resumen del temporizador (botón "Finalizar") — tiempo total y
+// tiempo por paso, medidos localmente y mandados de una sola vez al terminar
+// en vez de ir sincronizando paso a paso.
+export async function finalizarSesion(id: string, datos: {
+  tiempoTotalSegundos: number
+  tiempoPorPaso: Record<number, number>
+  inicio: string | null
+  fin: string
+}): Promise<void> {
+  const res = await fetchAutenticado(`${API_URL}/sesiones/${id}/finalizar`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      tiempo_total_segundos: datos.tiempoTotalSegundos,
+      tiempo_por_paso: datos.tiempoPorPaso,
+      inicio: datos.inicio,
+      fin: datos.fin,
+    }),
+  })
+  if (!res.ok) throw new Error('No se pudo guardar el resumen de la sesión.')
+}
+
 // Borra una conversación y su historial de chat (DELETE /sesiones/{id}, en
 // cascada por ondelete="CASCADE"). Irreversible — el llamador debe confirmar
 // con el usuario antes de invocar esta función.
