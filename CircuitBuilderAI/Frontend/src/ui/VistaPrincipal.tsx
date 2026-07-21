@@ -159,6 +159,35 @@ function TarjetaAgente({ etiqueta, uso }: { etiqueta: string; uso?: Uso }) {
               <span className="text-lg font-semibold">{uso.intentos ?? '—'}</span>
             </div>
           </div>
+
+          {/* Desglose por intento (#95) — solo tiene sentido mostrarlo cuando
+              hubo más de un intento (la IA se equivocó al menos una vez antes
+              de la propuesta válida). Con 1 intento, los números de arriba ya
+              cuentan toda la historia. */}
+          {uso.intentos_detalle && uso.intentos_detalle.length > 1 && (
+            <div className="flex flex-col gap-1.5 pt-3" style={{ borderTop: '1px solid var(--border)' }}>
+              <span className="block text-xs" style={{ color: 'var(--ink-soft)' }}>Desglose por intento</span>
+              {uso.intentos_detalle.map((d) => (
+                <div
+                  key={d.numero}
+                  className="flex items-start justify-between gap-3 text-xs rounded-lg px-2.5 py-1.5"
+                  style={{ background: d.exito ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'color-mix(in srgb, #ef4444 10%, transparent)' }}
+                >
+                  <div className="flex flex-col gap-0.5 min-w-0">
+                    <span className="font-semibold" style={{ color: d.exito ? 'var(--accent)' : '#ef4444' }}>
+                      Intento {d.numero} · {d.exito ? 'válido' : 'falló'}
+                    </span>
+                    {!d.exito && d.error && (
+                      <span className="truncate" style={{ color: 'var(--ink-soft)' }} title={d.error}>{d.error}</span>
+                    )}
+                  </div>
+                  <span className="shrink-0 font-mono" style={{ color: 'var(--ink-soft)' }}>
+                    {formatNum(d.tokens_total)} · {formatSeg(d.tiempo_segundos)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       ) : (
         <p className="text-sm p-4" style={{ background: 'var(--bg1)', color: 'var(--ink-soft)' }}>Sin datos (sesión de ejemplo).</p>
@@ -177,6 +206,15 @@ function PanelMetricas({ metricasProceso, usoChat }: { metricasProceso?: Sesion[
   const totalTokens = todos.reduce((acc, u) => acc + (u.tokens_total ?? 0), 0)
   const totalTiempo = todos.reduce((acc, u) => acc + (u.tiempo_segundos ?? 0), 0)
 
+  // Visión = solo el extractor (el único agente que lee la imagen). Razón =
+  // planner + cada turno del chat (clasificar/modificar/responder son texto,
+  // nunca ven la imagen) — split pedido para #95.
+  const visionTokens = extractor?.tokens_total ?? 0
+  const visionTiempo = extractor?.tiempo_segundos ?? 0
+  const razonTokens = (planner?.tokens_total ?? 0) + usoChat.reduce((acc, u) => acc + (u.uso.tokens_total ?? 0), 0)
+  const razonTiempo = (planner?.tiempo_segundos ?? 0)
+    + usoChat.reduce((acc, u) => acc + (u.uso.tiempo_total_segundos ?? u.uso.tiempo_segundos ?? 0), 0)
+
   if (todos.length === 0) {
     return (
       <div className="absolute inset-0 grid place-items-center">
@@ -191,6 +229,11 @@ function PanelMetricas({ metricasProceso, usoChat }: { metricasProceso?: Sesion[
         <TarjetaResumen titulo="Tokens totales" valor={formatNum(totalTokens)} />
         <TarjetaResumen titulo="Tiempo acumulado" valor={formatSeg(totalTiempo)} />
         <TarjetaResumen titulo="Llamadas al modelo" valor={String(todos.length)} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <TarjetaResumen titulo="Visión (tokens · tiempo)" valor={`${formatNum(visionTokens)} · ${formatSeg(visionTiempo)}`} />
+        <TarjetaResumen titulo="Razón (tokens · tiempo)" valor={`${formatNum(razonTokens)} · ${formatSeg(razonTiempo)}`} />
       </div>
 
       <div>
