@@ -958,13 +958,23 @@ function VistaPrincipal({
           </div>
           <div className="flex items-center justify-center gap-1.5">
             {instrucciones.map((ins) => (
-              <button
-                key={ins.numero}
-                onClick={() => irAPaso(ins.numero)}
-                className="w-2 h-2 rounded-full transition"
-                style={{ background: ins.numero <= paso ? 'var(--accent)' : 'var(--border)' }}
-                title={`Paso ${ins.numero}`}
-              />
+              <div key={ins.numero} className="relative group py-2">
+                <button
+                  onClick={() => irAPaso(ins.numero)}
+                  aria-label={`Paso ${ins.numero}`}
+                  className="block w-2 h-2 rounded-full transition-transform duration-150 ease-out group-hover:scale-[2.5]"
+                  style={{ background: ins.numero <= paso ? 'var(--accent)' : 'var(--border)' }}
+                />
+                {/* Tooltip tipo "zoom": aparece con un pop al pasar el mouse
+                    encima del punto, en vez del tooltip nativo del navegador
+                    (lento y sin animación). */}
+                <span
+                  className="pointer-events-none absolute -top-1 left-1/2 -translate-x-1/2 -translate-y-full scale-50 opacity-0 group-hover:scale-100 group-hover:opacity-100 transition-all duration-150 ease-out text-[10px] font-semibold px-2 py-1 rounded-lg whitespace-nowrap shadow"
+                  style={{ background: 'var(--accent)', color: 'var(--bg2)' }}
+                >
+                  Paso {ins.numero}
+                </span>
+              </div>
             ))}
           </div>
 
