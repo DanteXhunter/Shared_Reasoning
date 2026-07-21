@@ -3,7 +3,7 @@ from openai import RateLimitError, APIError
 from schemas.netlist import Netlist
 from pydantic import ValidationError
 from typing import TypedDict, Optional
-from agents.topologia import construir_nets
+from agents.topologia import construir_nets, avisos_graves
 from providers.catalogo import (
     MODELOS_LANGGRAPH,
     crear_modelo_langgraph as crear_modelo,
@@ -268,6 +268,16 @@ def nodo_validar(estado: EstadoExtractor) -> dict:
 
     if not netlist_dict.get("conexiones"):
         return _fallo("El netlist no contiene ninguna conexión. Describe todas las conexiones entre componentes.")
+
+    # Integridad referencial ANTES que cualquier análisis topológico: si una
+    # conexión apunta a un componente o pin que no existe, los nets que salgan
+    # de ahí no significan nada (ese endpoint se degrada a "nodo suelto" y el
+    # resto de las comprobaciones lo ignoran en silencio). Fue exactamente lo
+    # que dejó pasar un netlist con conexiones hacia un "R8" inexistente, que
+    # el planner luego materializó como una resistencia de más.
+    errores_referencias = avisos_graves(construir_nets(netlist_dict)[1])
+    if errores_referencias:
+        return _fallo("\n".join(errores_referencias))
 
     errores_topologia = _detectar_pines_propios_en_mismo_nodo(netlist_dict)
     if errores_topologia:
