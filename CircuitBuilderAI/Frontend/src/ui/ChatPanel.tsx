@@ -18,11 +18,16 @@ type Props = {
   proveedorRazon: string
   nivel: string
   onInstruccionesActualizadas: (instrucciones: Instruccion[]) => void
+  // El backend devuelve el netlist ya modificado cuando el usuario cambia la
+  // TOPOLOGÍA por chat ("quita el LED"). Hay que adoptarlo: el netlist se
+  // reenvía en cada mensaje siguiente, así que si se ignora, el modelo recibe
+  // un circuito viejo junto a las instrucciones nuevas y se contradice solo.
+  onNetlistActualizado: (netlist: Netlist) => void
   // Reporta el consumo de cada turno del chat — ver pestaña "Métricas".
   onUso?: (uso: Uso, intencion: string, tipoInteraccion?: string) => void
 }
 
-function ChatPanel({ mensajes, onMensajes, sesionId, netlist, instrucciones, proveedor, proveedorRazon, nivel, onInstruccionesActualizadas, onUso }: Props) {
+function ChatPanel({ mensajes, onMensajes, sesionId, netlist, instrucciones, proveedor, proveedorRazon, nivel, onInstruccionesActualizadas, onNetlistActualizado, onUso }: Props) {
   const [texto, setTexto] = useState('')
   const [cargando, setCargando] = useState(false)
   // Se siembra con los mensajes ya cargados para que el LLM tenga el contexto
@@ -70,6 +75,9 @@ function ChatPanel({ mensajes, onMensajes, sesionId, netlist, instrucciones, pro
           const respuesta: MensajeHistorial = { rol: 'assistant', contenido: evento.respuesta }
           setHistorial((h) => [...h, respuesta])
           onMensajes([...mensajes, { de: 'tu', texto: limpio }, { de: 'ai', texto: evento.respuesta }])
+          if (evento.netlist_modificado) {
+            onNetlistActualizado(evento.netlist_modificado)
+          }
           if (evento.instrucciones_actualizadas) {
             onInstruccionesActualizadas(evento.instrucciones_actualizadas)
           }
