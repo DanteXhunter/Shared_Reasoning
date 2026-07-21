@@ -608,38 +608,6 @@ function VistaPrincipal({
     }
   }, [])
 
-  // Salto animado a un paso no consecutivo (click en un punto lejano del
-  // menú de puntos): en vez de saltar de un tiro, recorre cada paso
-  // intermedio para que se perciba el movimiento a través de la secuencia.
-  // Los pasos adyacentes (flechas ← →, teclado) no la usan — ahí un salto
-  // directo ya es instantáneo y animarlo se sentiría con retraso.
-  const animandoRef = useRef<number | null>(null)
-  useEffect(() => () => {
-    if (animandoRef.current) clearInterval(animandoRef.current)
-  }, [])
-  function irAPaso(destino: number) {
-    const objetivo = Math.max(1, Math.min(total, destino))
-    if (animandoRef.current) {
-      clearInterval(animandoRef.current)
-      animandoRef.current = null
-    }
-    if (Math.abs(objetivo - paso) <= 1) {
-      setPaso(objetivo)
-      return
-    }
-    const direccion = objetivo > paso ? 1 : -1
-    animandoRef.current = window.setInterval(() => {
-      setPaso((p) => {
-        const siguiente = p + direccion
-        if (siguiente === objetivo && animandoRef.current) {
-          clearInterval(animandoRef.current)
-          animandoRef.current = null
-        }
-        return siguiente
-      })
-    }, 45)
-  }
-
   // Navegación de pasos con el teclado (← →), salvo al escribir en un input.
   // Usa marcaPasoRef (no el estado `paso`, que puede quedar obsoleto en este
   // closure) como fuente de la posición actual para el tiempo por paso.
