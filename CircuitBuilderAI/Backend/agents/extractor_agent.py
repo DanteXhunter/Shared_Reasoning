@@ -13,6 +13,7 @@ from providers.catalogo import (
 import base64
 import json
 import os
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -113,9 +114,17 @@ class EstadoExtractor(TypedDict):
     # para diagnosticar si un netlist incompleto se debe a truncamiento o a que
     # el modelo no vio las conexiones.
     finish_reason: Optional[str]
+    # Tiempo del intento actual (nodo_analizar lo mide, nodo_validar lo cierra
+    # en un registro de intentos_detalle) — separado de tiempo_segundos, que en
+    # ejecutar_extractor mide el wall-clock de TODA la corrida.
+    tiempo_intento: float
+    # Desglose por intento (#95): uno por cada llamada al LLM, con su propio
+    # costo y si esa respuesta pasó la validación o no.
+    intentos_detalle: list[dict]
 
 
 def nodo_analizar(estado: EstadoExtractor) -> dict:
+    inicio_intento = time.time()
     modelo = crear_modelo(estado["proveedor"], estado.get("api_key_override"))
     intento = estado["intento"]
     errores = estado["errores"]
@@ -146,8 +155,11 @@ def nodo_analizar(estado: EstadoExtractor) -> dict:
     return {
         "respuesta_raw": respuesta.content,
         "intento": intento + 1,
-        "tokens_entrada": estado["tokens_entrada"] + tokens_entrada,
-        "tokens_salida": estado["tokens_salida"] + tokens_salida,
+        # Costo de ESTE intento únicamente (no acumulado) — nodo_validar lo
+        # cierra con el resultado de la validación en intentos_detalle (#95).
+        "tokens_entrada": tokens_entrada,
+        "tokens_salida": tokens_salida,
+        "tiempo_intento": round(time.time() - inicio_intento, 2),
         "finish_reason": finish_reason,
     }
 
@@ -219,13 +231,27 @@ def nodo_validar(estado: EstadoExtractor) -> dict:
     texto_raw = estado["respuesta_raw"] or ""
     texto = texto_raw.strip().replace("```json", "").replace("```", "").strip()
 
+    # Costo de ESTE intento (ver nodo_analizar) — se cierra acá con el
+    # resultado de la validación y se agrega al desglose por intento (#95).
+    registro_base = {
+        "numero": estado["intento"],
+        "tokens_entrada": estado["tokens_entrada"],
+        "tokens_salida": estado["tokens_salida"],
+        "tokens_total": estado["tokens_entrada"] + estado["tokens_salida"],
+        "tiempo_segundos": estado.get("tiempo_intento", 0.0),
+    }
+
+    def _fallo(error: str) -> dict:
+        return {
+            "errores": estado["errores"] + [error],
+            "exito": False,
+            "intentos_detalle": estado["intentos_detalle"] + [{**registro_base, "exito": False, "error": error}],
+        }
+
     try:
         datos = json.loads(texto)
     except json.JSONDecodeError as e:
-        return {
-            "errores": estado["errores"] + [f"JSON inválido: {str(e)}"],
-            "exito": False,
-        }
+        return _fallo(f"JSON inválido: {str(e)}")
 
     try:
         netlist = Netlist(**datos)
@@ -233,37 +259,26 @@ def nodo_validar(estado: EstadoExtractor) -> dict:
         errores_legibles = "; ".join(
             f"{err['loc']}: {err['msg']}" for err in e.errors()
         )
-        return {
-            "errores": estado["errores"] + [f"Estructura inválida: {errores_legibles}"],
-            "exito": False,
-        }
+        return _fallo(f"Estructura inválida: {errores_legibles}")
 
     netlist_dict = netlist.model_dump()
 
     if not netlist_dict.get("componentes"):
-        return {
-            "errores": estado["errores"] + ["El netlist no contiene ningún componente. Extrae todos los componentes visibles en el esquemático."],
-            "exito": False,
-        }
+        return _fallo("El netlist no contiene ningún componente. Extrae todos los componentes visibles en el esquemático.")
 
     if not netlist_dict.get("conexiones"):
-        return {
-            "errores": estado["errores"] + ["El netlist no contiene ninguna conexión. Describe todas las conexiones entre componentes."],
-            "exito": False,
-        }
+        return _fallo("El netlist no contiene ninguna conexión. Describe todas las conexiones entre componentes.")
 
     errores_topologia = _detectar_pines_propios_en_mismo_nodo(netlist_dict)
     if errores_topologia:
-        return {
-            "errores": estado["errores"] + ["\n".join(errores_topologia)],
-            "exito": False,
-        }
+        return _fallo("\n".join(errores_topologia))
 
     netlist_dict = _normalizar_poder(netlist_dict)
 
     return {
         "netlist": netlist_dict,
         "exito": True,
+        "intentos_detalle": estado["intentos_detalle"] + [{**registro_base, "exito": True, "error": None}],
     }
 
 
@@ -320,7 +335,6 @@ async def ejecutar_extractor(
     proveedor: str,
     api_key_override: str | None = None,
 ) -> dict:
-    import time
     inicio = time.time()
 
     imagen_base64 = base64.b64encode(imagen_bytes).decode("utf-8")
@@ -354,6 +368,8 @@ async def ejecutar_extractor(
         "tokens_entrada": 0,
         "tokens_salida": 0,
         "finish_reason": None,
+        "tiempo_intento": 0.0,
+        "intentos_detalle": [],
     }
 
     grafo = crear_grafo_extractor()
@@ -398,18 +414,24 @@ async def ejecutar_extractor(
         }
 
     tiempo_total = round(time.time() - inicio, 2)
+    intentos_detalle = estado_final["intentos_detalle"]
+    # Derivados del desglose por intento (#95) — misma fuente de verdad que
+    # usa planner_agent.py, en vez de un acumulado aparte que se desincroniza.
+    tokens_entrada_total = sum(d["tokens_entrada"] for d in intentos_detalle)
+    tokens_salida_total = sum(d["tokens_salida"] for d in intentos_detalle)
 
     if estado_final["exito"]:
         return {
             "resultado": estado_final["netlist"],
             "uso": {
-                "tokens_entrada": estado_final["tokens_entrada"],
-                "tokens_salida": estado_final["tokens_salida"],
-                "tokens_total": estado_final["tokens_entrada"] + estado_final["tokens_salida"],
+                "tokens_entrada": tokens_entrada_total,
+                "tokens_salida": tokens_salida_total,
+                "tokens_total": tokens_entrada_total + tokens_salida_total,
                 "intentos": estado_final["intento"],
                 "modelo_activo": modelo_activo,
                 "tiempo_segundos": tiempo_total,
                 "finish_reason": estado_final.get("finish_reason"),
+                "intentos_detalle": intentos_detalle,
             },
         }
     else:
@@ -418,12 +440,13 @@ async def ejecutar_extractor(
             "mensaje": f"No se pudo extraer un netlist válido después de {estado_final['intento']} intentos.",
             "errores": estado_final["errores"],
             "uso": {
-                "tokens_entrada": estado_final["tokens_entrada"],
-                "tokens_salida": estado_final["tokens_salida"],
-                "tokens_total": estado_final["tokens_entrada"] + estado_final["tokens_salida"],
+                "tokens_entrada": tokens_entrada_total,
+                "tokens_salida": tokens_salida_total,
+                "tokens_total": tokens_entrada_total + tokens_salida_total,
                 "intentos": estado_final["intento"],
                 "modelo_activo": modelo_activo,
                 "tiempo_segundos": tiempo_total,
                 "finish_reason": estado_final.get("finish_reason"),
+                "intentos_detalle": intentos_detalle,
             },
         }
