@@ -212,6 +212,10 @@ function PanelMetricas({ metricasProceso, usoChat, resumenSesion }: {
   const todos = [extractor, planner, ...usoChat.map((u) => u.uso)].filter((u): u is Uso => Boolean(u))
   const totalTokens = todos.reduce((acc, u) => acc + (u.tokens_total ?? 0), 0)
   const totalTiempo = todos.reduce((acc, u) => acc + (u.tiempo_segundos ?? 0), 0)
+  // "Llamadas al modelo" = llamadas REALES al LLM, no corridas de agente —
+  // si el extractor o el planner reintentaron (ver "Desglose por intento"),
+  // cada intento es una llamada aparte y debe contarse, no solo la corrida.
+  const llamadasAlModelo = todos.reduce((acc, u) => acc + (u.intentos ?? 1), 0)
 
   // Visión = solo el extractor (el único agente que lee la imagen). Razón =
   // planner + cada turno del chat (clasificar/modificar/responder son texto,
@@ -278,7 +282,7 @@ function PanelMetricas({ metricasProceso, usoChat, resumenSesion }: {
       <div className="grid grid-cols-3 gap-3">
         <TarjetaResumen titulo="Tokens totales" valor={formatNum(totalTokens)} />
         <TarjetaResumen titulo="Tiempo acumulado" valor={formatSeg(totalTiempo)} />
-        <TarjetaResumen titulo="Llamadas al modelo" valor={String(todos.length)} />
+        <TarjetaResumen titulo="Llamadas al modelo" valor={String(llamadasAlModelo)} />
       </div>
 
       <div className="grid grid-cols-2 gap-3">
@@ -604,6 +608,38 @@ function VistaPrincipal({
     }
   }, [])
 
+  // Salto animado a un paso no consecutivo (click en un punto lejano del
+  // menú de puntos): en vez de saltar de un tiro, recorre cada paso
+  // intermedio para que se perciba el movimiento a través de la secuencia.
+  // Los pasos adyacentes (flechas ← →, teclado) no la usan — ahí un salto
+  // directo ya es instantáneo y animarlo se sentiría con retraso.
+  const animandoRef = useRef<number | null>(null)
+  useEffect(() => () => {
+    if (animandoRef.current) clearInterval(animandoRef.current)
+  }, [])
+  function irAPaso(destino: number) {
+    const objetivo = Math.max(1, Math.min(total, destino))
+    if (animandoRef.current) {
+      clearInterval(animandoRef.current)
+      animandoRef.current = null
+    }
+    if (Math.abs(objetivo - paso) <= 1) {
+      setPaso(objetivo)
+      return
+    }
+    const direccion = objetivo > paso ? 1 : -1
+    animandoRef.current = window.setInterval(() => {
+      setPaso((p) => {
+        const siguiente = p + direccion
+        if (siguiente === objetivo && animandoRef.current) {
+          clearInterval(animandoRef.current)
+          animandoRef.current = null
+        }
+        return siguiente
+      })
+    }, 45)
+  }
+
   // Navegación de pasos con el teclado (← →), salvo al escribir en un input.
   // Usa marcaPasoRef (no el estado `paso`, que puede quedar obsoleto en este
   // closure) como fuente de la posición actual para el tiempo por paso.
@@ -863,11 +899,12 @@ function VistaPrincipal({
             {tab === 'simulacion' && (
               <button
                 onClick={() => setRevelado((v) => !v)}
-                className="absolute top-3 right-3 grid place-items-center w-8 h-8 rounded-lg shadow"
-                style={{ background: 'var(--bg2)', border: '1px solid var(--border)' }}
-                title={revelado ? 'Ver circuito completo' : 'Volver al revelado por paso'}
+                className="absolute top-3 right-3 flex items-center gap-1.5 px-3 py-1.5 rounded-full shadow text-xs font-semibold transition hover:opacity-80"
+                style={{ background: 'var(--bg2)', border: '1px solid var(--border)', color: 'var(--ink)' }}
+                title={revelado ? 'Ver el circuito completo, sin atenuar los pasos futuros' : 'Volver a resaltar solo el paso activo'}
               >
-                {revelado ? <Eye size={16} /> : <EyeOff size={16} />}
+                {revelado ? <Eye size={14} /> : <EyeOff size={14} />}
+                {revelado ? 'Ver todo' : 'Por pasos'}
               </button>
             )}
           </div>
@@ -953,23 +990,13 @@ function VistaPrincipal({
           </div>
           <div className="flex items-center justify-center gap-1.5">
             {instrucciones.map((ins) => (
-              <div key={ins.numero} className="relative group py-2">
-                <button
-                  onClick={() => irAPaso(ins.numero)}
-                  aria-label={`Paso ${ins.numero}`}
-                  className="block w-2 h-2 rounded-full transition-transform duration-150 ease-out group-hover:scale-[2.5]"
-                  style={{ background: ins.numero <= paso ? 'var(--accent)' : 'var(--border)' }}
-                />
-                {/* Tooltip tipo "zoom": aparece con un pop al pasar el mouse
-                    encima del punto, en vez del tooltip nativo del navegador
-                    (lento y sin animación). */}
-                <span
-                  className="pointer-events-none absolute -top-1 left-1/2 -translate-x-1/2 -translate-y-full scale-50 opacity-0 group-hover:scale-100 group-hover:opacity-100 transition-all duration-150 ease-out text-[10px] font-semibold px-2 py-1 rounded-lg whitespace-nowrap shadow"
-                  style={{ background: 'var(--accent)', color: 'var(--bg2)' }}
-                >
-                  Paso {ins.numero}
-                </span>
-              </div>
+              <button
+                key={ins.numero}
+                onClick={() => irAPaso(ins.numero)}
+                className="w-2 h-2 rounded-full transition"
+                style={{ background: ins.numero <= paso ? 'var(--accent)' : 'var(--border)' }}
+                title={`Paso ${ins.numero}`}
+              />
             ))}
           </div>
 
