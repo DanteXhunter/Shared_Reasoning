@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, Check, Cloud, Gift, HardDrive, type LucideIcon } from 'lucide-react'
+import { ChevronDown, Check, Cloud, Gift, HardDrive, Lock, HelpCircle, type LucideIcon } from 'lucide-react'
 import {
   obtenerProveedores,
   badgeDe,
@@ -9,6 +9,7 @@ import {
   type ModeloProveedor,
   type Rol,
 } from '../api/proveedores'
+import type { ModelosDisponiblesUsuario } from '../api/auth'
 
 type Props = {
   value: string
@@ -17,6 +18,12 @@ type Props = {
   // imagen; razón resuelve el planner y el chat). Dos instancias de este
   // componente con rol distinto son dos selectores independientes.
   rol: Rol
+  // Resultado de GET /auth/modelos-disponibles (ver Bienvenida.tsx, que lo
+  // pide una sola vez para ambos selectores). Si el usuario tiene su propia
+  // key para el proveedor de un modelo, la disponibilidad depende SOLO de
+  // esa key (aunque el servidor también tenga una configurada); si no,
+  // aplica el flag `disponible` que ya manda /proveedores.
+  disponibilidadUsuario?: ModelosDisponiblesUsuario | null
 }
 
 const ICONO_CATEGORIA: Record<Categoria, LucideIcon> = {
@@ -31,7 +38,7 @@ const ICONO_CATEGORIA: Record<Categoria, LucideIcon> = {
 // Las categorías van en tabs, no apiladas: con 6 modelos la lista vertical
 // desbordaba la tarjeta de bienvenida. Cada tab muestra sus modelos en una
 // grilla de 2 columnas, así el panel crece a lo ancho y no a lo alto.
-function SelectorModelo({ value, onChange, rol }: Props) {
+function SelectorModelo({ value, onChange, rol, disponibilidadUsuario }: Props) {
   const [catalogo, setCatalogo] = useState<CatalogoProveedores | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [abierto, setAbierto] = useState(false)
@@ -86,10 +93,26 @@ function SelectorModelo({ value, onChange, rol }: Props) {
     [grupos, tab],
   )
 
+  // Si el usuario tiene su propia key para el proveedor de este modelo, el
+  // estado real es el que confirmó esa key (GET /auth/modelos-disponibles),
+  // no el flag genérico del servidor. Sin key propia para ese grupo, se cae
+  // al flag de siempre (comportamiento anterior a este feature, intacto).
+  // "sin_verificar" (solo Gemini de pago hoy, ver api/auth.ts): no se puede
+  // confirmar por adelantado si la key tiene facturación — se deja elegible
+  // (podría funcionar) pero con aviso, en vez de mostrarlo como confirmado.
+  function estadoDe(modelo: ModeloProveedor): 'disponible' | 'bloqueado' | 'sin_verificar' {
+    const propia = modelo.grupo_credencial ? disponibilidadUsuario?.[modelo.grupo_credencial] : undefined
+    if (!propia) return modelo.disponible ? 'disponible' : 'bloqueado'
+    if (propia.confirmados.includes(modelo.id)) return 'disponible'
+    if (propia.sin_verificar.includes(modelo.id)) return 'sin_verificar'
+    return 'bloqueado'
+  }
+
   // La navegación por teclado se limita a la categoría visible.
   const seleccionables = useMemo(
-    () => (grupoActivo?.modelos ?? []).filter((m) => m.disponible),
-    [grupoActivo],
+    () => (grupoActivo?.modelos ?? []).filter((m) => estadoDe(m) !== 'bloqueado'),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [grupoActivo, disponibilidadUsuario],
   )
 
   // Cerrar al hacer clic fuera.
@@ -121,7 +144,7 @@ function SelectorModelo({ value, onChange, rol }: Props) {
   }, [activo, abierto])
 
   function elegir(modelo: ModeloProveedor) {
-    if (!modelo.disponible) return
+    if (estadoDe(modelo) === 'bloqueado') return
     onChange(modelo.id)
     setAbierto(false)
   }
@@ -188,8 +211,13 @@ function SelectorModelo({ value, onChange, rol }: Props) {
         className="flex min-w-[15rem] items-center gap-2 rounded-lg px-3 py-1.5 text-sm outline-none transition disabled:opacity-50"
         style={{ background: 'var(--bg1)', border: '1px solid var(--border)', color: 'var(--ink)' }}
       >
-        <span className="truncate">{cargando ? 'Cargando modelos…' : actual?.etiqueta ?? value}</span>
-        {actual && (
+        {actual && estadoDe(actual) === 'sin_verificar' && (
+          <span title="No podemos confirmar de antemano si tu API key tiene facturación para este modelo — se sabrá hasta el primer uso real.">
+            <HelpCircle size={13} className="shrink-0" style={{ color: 'var(--ink-soft)' }} />
+          </span>
+        )}
+        <span className="flex-1 truncate">{cargando ? 'Cargando modelos…' : actual?.etiqueta ?? value}</span>
+        {actual && estadoDe(actual) !== 'sin_verificar' && (
           <span
             className="ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide"
             style={{ background: 'var(--bg2)', color: 'var(--ink-soft)' }}
@@ -242,9 +270,16 @@ function SelectorModelo({ value, onChange, rol }: Props) {
           {/* Modelos de la categoría activa, en 2 columnas */}
           <ul role="listbox" className="mt-2 grid grid-cols-2 gap-1">
             {grupoActivo.modelos.map((modelo) => {
+              const estado = estadoDe(modelo)
               const indice = seleccionables.findIndex((m) => m.id === modelo.id)
-              const resaltado = modelo.disponible && indice === activo
+              const resaltado = estado !== 'bloqueado' && indice === activo
               const elegido = modelo.id === value
+              // Bloqueado por dos causas distintas: sin key propia configurada
+              // para este proveedor, vs. key propia configurada pero sin
+              // acceso confirmado a este modelo (ver estadoDe).
+              const tieneKeyPropia = modelo.grupo_credencial
+                ? Boolean(disponibilidadUsuario?.[modelo.grupo_credencial])
+                : false
               return (
                 <li
                   key={modelo.id}
@@ -253,11 +288,11 @@ function SelectorModelo({ value, onChange, rol }: Props) {
                   }}
                   role="option"
                   aria-selected={elegido}
-                  aria-disabled={!modelo.disponible}
+                  aria-disabled={estado === 'bloqueado'}
                   onClick={() => elegir(modelo)}
                   onMouseEnter={() => indice >= 0 && setActivo(indice)}
                   className={`rounded-lg px-2.5 py-2 ${
-                    modelo.disponible ? 'cursor-pointer' : 'cursor-not-allowed opacity-40'
+                    estado === 'bloqueado' ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
                   }`}
                   style={{
                     background: resaltado ? 'var(--bg1)' : 'transparent',
@@ -265,23 +300,47 @@ function SelectorModelo({ value, onChange, rol }: Props) {
                   }}
                 >
                   <div className="flex items-center gap-1.5">
-                    <Check
-                      size={13}
-                      className="shrink-0"
-                      style={{ color: elegido ? 'var(--accent)' : 'transparent' }}
-                    />
+                    {estado === 'disponible' ? (
+                      <Check
+                        size={13}
+                        className="shrink-0"
+                        style={{ color: elegido ? 'var(--accent)' : 'transparent' }}
+                      />
+                    ) : estado === 'sin_verificar' ? (
+                      // El title en un <svg> no dispara el tooltip nativo en los
+                      // navegadores (a diferencia de un elemento HTML normal) —
+                      // por eso el atributo va en este <span> que lo envuelve.
+                      <span
+                        className="shrink-0"
+                        title="No podemos confirmar de antemano si tu API key tiene facturación para este modelo — se sabrá hasta el primer uso real."
+                      >
+                        <HelpCircle size={13} style={{ color: 'var(--ink-soft)' }} />
+                      </span>
+                    ) : (
+                      <Lock size={13} className="shrink-0" style={{ color: 'var(--ink-soft)' }} />
+                    )}
                     <span className="truncate text-sm" style={{ color: 'var(--ink)' }}>
                       {modelo.etiqueta}
                     </span>
-                    <span
-                      className="ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide"
-                      style={{ background: 'var(--bg1)', color: 'var(--ink-soft)' }}
-                    >
-                      {badgeDe(modelo)}
-                    </span>
+                    {/* Sin el badge de costo/cuota cuando no se puede verificar: no
+                        hay forma de confirmar que ese dato aplique de verdad a esta key. */}
+                    {estado !== 'sin_verificar' && (
+                      <span
+                        className="ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide"
+                        style={{ background: 'var(--bg1)', color: 'var(--ink-soft)' }}
+                      >
+                        {badgeDe(modelo)}
+                      </span>
+                    )}
                   </div>
                   <p className="mt-0.5 pl-[1.15rem] text-xs leading-snug" style={{ color: 'var(--ink-soft)' }}>
-                    {modelo.disponible ? modelo.descripcion : 'Falta configurar su API key.'}
+                    {estado === 'disponible'
+                      ? modelo.descripcion
+                      : estado === 'sin_verificar'
+                        ? 'Sin verificar — pasa el mouse sobre el ícono para más detalle.'
+                        : tieneKeyPropia
+                          ? 'Tu API key no tiene acceso a este modelo.'
+                          : 'Falta configurar su API key.'}
                   </p>
                 </li>
               )

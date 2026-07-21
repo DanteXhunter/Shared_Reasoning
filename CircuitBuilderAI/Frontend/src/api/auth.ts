@@ -178,6 +178,29 @@ export async function cambiarContrasena(contrasenaActual: string, contrasenaNuev
   if (!res.ok) throw new Error(await mensajeDeError(res))
 }
 
+// Claves del catálogo que la key propia de cada grupo (openai/gemini/nvidia)
+// puede usar — se calcula en vivo contra el /models real de cada proveedor
+// (ver GET /auth/modelos-disponibles). Un grupo ausente en el resultado
+// significa "sin key propia configurada"; ahí el front cae al flag del
+// servidor, igual que antes de este feature.
+//
+// "sin_verificar" (solo pasa hoy con Gemini): el listado del proveedor SÍ
+// muestra el modelo, pero no se pudo confirmar con una llamada de prueba si
+// la key tiene facturación — Google le da a TODA key una cuota gratuita de
+// cortesía, así que una key sin facturación responde igual que una que sí
+// paga hasta que esa cuota se gasta de verdad con uso real. No es ni
+// "disponible" ni "bloqueado": mostrarlo como disponible sería engañoso.
+export type DisponibilidadGrupo = { confirmados: string[]; sin_verificar: string[] }
+export type ModelosDisponiblesUsuario = Record<string, DisponibilidadGrupo>
+
+// Se pide una sola vez por pantalla (no una por cada SelectorModelo montado)
+// porque dispara una llamada real a cada proveedor con la key del usuario.
+export async function obtenerModelosDisponibles(): Promise<ModelosDisponiblesUsuario> {
+  const res = await fetchAutenticado(`${API_URL}/auth/modelos-disponibles`)
+  if (!res.ok) throw new Error(await mensajeDeError(res))
+  return (await res.json()) as ModelosDisponiblesUsuario
+}
+
 // Guarda las API keys propias del usuario (PATCH /auth/api-keys), cifradas en
 // el backend — nunca viajan de vuelta. Cada campo: undefined = no tocar esa
 // key, '' = borrarla, cualquier otro valor = guardarla. Devuelve el usuario

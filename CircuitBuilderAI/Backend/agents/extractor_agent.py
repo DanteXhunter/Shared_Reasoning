@@ -9,6 +9,8 @@ from providers.catalogo import (
     crear_modelo_langgraph as crear_modelo,
     crear_provider_chat,
     mensaje_rate_limit,
+    es_error_freetier,
+    grupo_credencial_de,
 )
 import base64
 import json
@@ -388,6 +390,15 @@ async def ejecutar_extractor(
             "error": True,
             "mensaje": mensaje,
             "errores": [detalle],
+            # Confirmación real (no una prueba sintética) de que la key PROPIA
+            # del usuario no tiene facturación — ver disponibilidad_usuario.py
+            # y Usuario.sin_facturacion_confirmada. None si se usó la key del
+            # servidor (api_key_override vacío) o si no fue este motivo.
+            "sin_facturacion_grupo": (
+                grupo_credencial_de(proveedor)["id"]
+                if api_key_override and es_error_freetier(e) and grupo_credencial_de(proveedor)
+                else None
+            ),
             "uso": {
                 "tokens_entrada": 0,
                 "tokens_salida": 0,
