@@ -79,6 +79,9 @@ class EstadoGlobal(TypedDict):
     planner_tokens_entrada: int
     planner_tokens_salida: int
     planner_tiempo: float
+    # Desglose por intento (#95): uno por cada vez que nodo_planificar llamó
+    # al LLM, con su propio costo y si esa propuesta pasó la validación o no.
+    planner_intentos_detalle: list[dict]
     planner_posiciones_override: Optional[dict]  # {comp_id: fila} — sobrescribe calcular_posiciones()
     # Distribución previa a NO repetir (pedido abierto "arma diferente" — ver
     # agents/chat_agent_v2.py intención "proponer_alternativa"). Es la misma

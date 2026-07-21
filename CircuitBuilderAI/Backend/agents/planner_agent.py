@@ -328,8 +328,11 @@ def nodo_planificar(estado: EstadoGlobal) -> dict:
     return {
         "planner_respuesta_raw": respuesta.content,
         "planner_intento": intento + 1,
-        "planner_tokens_entrada": estado["planner_tokens_entrada"] + tokens_entrada,
-        "planner_tokens_salida": estado["planner_tokens_salida"] + tokens_salida,
+        # Costo de ESTE intento únicamente (no acumulado) — nodo_validar_plan
+        # lo cierra con el resultado de la validación y lo agrega a
+        # planner_intentos_detalle (#95: desglose por intento, no solo el total).
+        "planner_tokens_entrada": tokens_entrada,
+        "planner_tokens_salida": tokens_salida,
         "planner_tiempo": round(time.time() - inicio, 2),
     }
 
@@ -338,26 +341,34 @@ def nodo_validar_plan(estado: EstadoGlobal) -> dict:
     texto_raw = estado["planner_respuesta_raw"] or ""
     texto = texto_raw.strip().replace("```json", "").replace("```", "").strip()
 
+    # Costo de ESTE intento (ver nodo_planificar) — se cierra acá con el
+    # resultado de la validación y se agrega al desglose por intento (#95).
+    registro_base = {
+        "numero": estado["planner_intento"],
+        "tokens_entrada": estado["planner_tokens_entrada"],
+        "tokens_salida": estado["planner_tokens_salida"],
+        "tokens_total": estado["planner_tokens_entrada"] + estado["planner_tokens_salida"],
+        "tiempo_segundos": estado["planner_tiempo"],
+    }
+
+    def _fallo(error: str) -> dict:
+        return {
+            "planner_errores": estado["planner_errores"] + [error],
+            "planner_exito": False,
+            "planner_intentos_detalle": estado["planner_intentos_detalle"] + [{**registro_base, "exito": False, "error": error}],
+        }
+
     try:
         datos = json.loads(texto)
     except json.JSONDecodeError as e:
-        return {
-            "planner_errores": estado["planner_errores"] + [f"JSON inválido: {str(e)}"],
-            "planner_exito": False,
-        }
+        return _fallo(f"JSON inválido: {str(e)}")
 
     if "pasos" not in datos or len(datos["pasos"]) == 0:
-        return {
-            "planner_errores": estado["planner_errores"] + ["El JSON no contiene pasos o la lista está vacía"],
-            "planner_exito": False,
-        }
+        return _fallo("El JSON no contiene pasos o la lista está vacía")
 
     for paso in datos["pasos"]:
         if "numero" not in paso or "tipo" not in paso or "descripcion" not in paso:
-            return {
-                "planner_errores": estado["planner_errores"] + [f"Paso incompleto: falta numero, tipo o descripcion en {paso}"],
-                "planner_exito": False,
-            }
+            return _fallo(f"Paso incompleto: falta numero, tipo o descripcion en {paso}")
 
     # La física NO es negociable: se valida la propuesta de la IA contra la
     # verdad eléctrica del netlist. Si algo está mal, se rebota el detalle
@@ -366,14 +377,12 @@ def nodo_validar_plan(estado: EstadoGlobal) -> dict:
     errores_fisica = validar_instrucciones(netlist, datos["pasos"])
     if errores_fisica:
         resumen = "\n".join(f"- {e}" for e in errores_fisica)
-        return {
-            "planner_errores": estado["planner_errores"] + [resumen],
-            "planner_exito": False,
-        }
+        return _fallo(resumen)
 
     return {
         "planner_instrucciones": datos["pasos"],
         "planner_exito": True,
+        "planner_intentos_detalle": estado["planner_intentos_detalle"] + [{**registro_base, "exito": True, "error": None}],
     }
 
 
@@ -415,6 +424,7 @@ async def ejecutar_planner(estado_extractor: dict) -> dict:
         "planner_tokens_entrada": 0,
         "planner_tokens_salida": 0,
         "planner_tiempo": 0.0,
+        "planner_intentos_detalle": [],
     }
 
     grafo = crear_grafo_planner()
@@ -451,13 +461,17 @@ async def ejecutar_planner(estado_extractor: dict) -> dict:
             },
         }
 
+    intentos_detalle = estado_final["planner_intentos_detalle"]
     uso = {
-        "tokens_entrada": estado_final["planner_tokens_entrada"],
-        "tokens_salida": estado_final["planner_tokens_salida"],
-        "tokens_total": estado_final["planner_tokens_entrada"] + estado_final["planner_tokens_salida"],
+        # Derivados del desglose por intento (#95) — una sola fuente de verdad,
+        # en vez de mantener un acumulado aparte que se puede desincronizar.
+        "tokens_entrada": sum(d["tokens_entrada"] for d in intentos_detalle),
+        "tokens_salida": sum(d["tokens_salida"] for d in intentos_detalle),
+        "tokens_total": sum(d["tokens_total"] for d in intentos_detalle),
         "intentos": estado_final["planner_intento"],
         "modelo_activo": modelo_activo,
-        "tiempo_segundos": estado_final["planner_tiempo"],
+        "tiempo_segundos": round(sum(d["tiempo_segundos"] for d in intentos_detalle), 2),
+        "intentos_detalle": intentos_detalle,
     }
 
     if estado_final["planner_exito"]:
