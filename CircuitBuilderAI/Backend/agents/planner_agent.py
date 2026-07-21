@@ -8,6 +8,8 @@ from providers.catalogo import (
     MODELOS_LANGGRAPH,
     crear_modelo_langgraph as crear_modelo,
     mensaje_rate_limit,
+    es_error_freetier,
+    grupo_credencial_de,
 )
 import json
 import os
@@ -441,10 +443,18 @@ async def ejecutar_planner(estado_extractor: dict) -> dict:
         # Ver nota equivalente en extractor_agent.py: sin esto, la excepción
         # escapaba sin manejar y el 500 resultante llegaba sin headers de CORS.
         mensaje, detalle = mensaje_rate_limit(proveedor, modelo_activo, e)
+        api_key_razon_override = estado_extractor.get("api_key_razon")
         return {
             "error": True,
             "mensaje": mensaje,
             "errores": [detalle],
+            # Ver nota equivalente en extractor_agent.py — confirmación real de
+            # falta de facturación en la key propia del usuario.
+            "sin_facturacion_grupo": (
+                grupo_credencial_de(proveedor)["id"]
+                if api_key_razon_override and es_error_freetier(e) and grupo_credencial_de(proveedor)
+                else None
+            ),
             "uso": {
                 "tokens_entrada": 0, "tokens_salida": 0, "tokens_total": 0,
                 "intentos": 0, "modelo_activo": modelo_activo, "tiempo_segundos": 0.0,

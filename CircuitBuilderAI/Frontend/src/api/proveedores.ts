@@ -53,10 +53,13 @@ export async function obtenerProveedores(): Promise<CatalogoProveedores> {
   return (await res.json()) as CatalogoProveedores
 }
 
-// Texto corto del costo/cuota, para el badge de cada opción.
+// Texto corto del costo/cuota, para el badge de cada opción. Ya no se
+// muestra el número exacto de peticiones/día (ej. "1000/día"): es un límite
+// que Google puede cambiar o variar por cuenta, y no se verifica contra la
+// key real del usuario — prometer una cifra concreta que puede no cumplirse
+// es peor que solo decir "free".
 export function badgeDe(modelo: ModeloProveedor): string {
   if (modelo.categoria === 'local') return 'local'
   if (modelo.tipo_facturacion === 'saldo') return 'saldo'
-  if (modelo.peticiones_dia) return `${modelo.peticiones_dia}/día`
   return 'free'
 }

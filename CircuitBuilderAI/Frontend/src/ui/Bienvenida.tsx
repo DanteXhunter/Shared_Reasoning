@@ -3,7 +3,7 @@ import { ImageUp, Plus, Sun, Moon } from 'lucide-react'
 import { analizarEsquematico } from '../api/analizar'
 import { planificarCircuito } from '../api/planificar'
 import { crearSesion, abrirSesion } from '../api/sesiones'
-import { type Usuario } from '../api/auth'
+import { type Usuario, obtenerModelosDisponibles, type ModelosDisponiblesUsuario } from '../api/auth'
 import PanelUsuario from './PanelUsuario'
 import TemaProvider, { type Tema } from './theme'
 import { LogoWordmark } from './Logo'
@@ -59,6 +59,23 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
   const [arrastrando, setArrastrando] = useState(false)
   const [tema, setTema] = useState<Tema>('light')
   const inputRef = useRef<HTMLInputElement>(null)
+
+  // Qué modelos puede usar cada API key propia del usuario (candado en
+  // SelectorModelo). Se pide UNA sola vez al montar, no dentro de cada
+  // selector (visión y razón), porque dispara una llamada real a cada
+  // proveedor — y de nuevo cada vez que un análisis/plan real falla (ver
+  // ejecutar()), porque esa falla puede ser justo la que confirma en el
+  // backend que una key propia no tiene facturación (#candado Gemini).
+  const [disponibilidadUsuario, setDisponibilidadUsuario] = useState<ModelosDisponiblesUsuario | null>(null)
+
+  function recargarDisponibilidad() {
+    if (!usuario) return
+    obtenerModelosDisponibles()
+      .then(setDisponibilidadUsuario)
+      .catch(() => setDisponibilidadUsuario(null)) // sin key propia o falló: cae al flag del servidor
+  }
+
+  useEffect(recargarDisponibilidad, [usuario])
 
   // Historial real de sesiones del usuario para el sidebar (#73/#88), con
   // búsqueda, renombrar y borrar (#88 ampliado).
@@ -157,6 +174,11 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Error desconocido')
       setFase('form')
+      // Un fallo real de /analizar o /planificar con key propia puede ser
+      // justo el que el backend usa para confirmar que esa key no tiene
+      // facturación (ver GET /auth/modelos-disponibles) — sin esto, el
+      // candado de Gemini solo se actualizaba recargando la página entera.
+      recargarDisponibilidad()
     }
   }
 
@@ -313,11 +335,21 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
               <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
                 <div className="flex items-center gap-3">
                   <label className="text-xs uppercase tracking-widest" style={{ color: 'var(--ink-soft)' }}>Visión</label>
-                  <SelectorModelo rol="vision" value={proveedor} onChange={setProveedor} />
+                  <SelectorModelo
+                    rol="vision"
+                    value={proveedor}
+                    onChange={setProveedor}
+                    disponibilidadUsuario={disponibilidadUsuario}
+                  />
                 </div>
                 <div className="flex items-center gap-3">
                   <label className="text-xs uppercase tracking-widest" style={{ color: 'var(--ink-soft)' }}>Razón</label>
-                  <SelectorModelo rol="razon" value={proveedorRazon} onChange={setProveedorRazon} />
+                  <SelectorModelo
+                    rol="razon"
+                    value={proveedorRazon}
+                    onChange={setProveedorRazon}
+                    disponibilidadUsuario={disponibilidadUsuario}
+                  />
                 </div>
                 <button
                   onClick={continuar}

@@ -39,12 +39,14 @@ from providers.catalogo import (
     resolver_api_key_usuario,
 )
 from providers.cifrado_keys import cifrar_api_keys, descifrar_api_keys
+from providers.disponibilidad_usuario import modelos_disponibles_para_key
 from rate_limit import (
     verificar_frecuencia,
     FRECUENCIA_AUTH,
 )
 from collections import Counter
 from datetime import datetime
+import asyncio
 import json
 import os
 import secrets
@@ -110,6 +112,23 @@ async def proveedores():
 
 def _ip_de(request: Request) -> str:
     return request.client.host if request.client else "desconocida"
+
+
+def _marcar_sin_facturacion(db: Session, usuario: Usuario, grupo_id: str | None) -> None:
+    """Persiste que la key propia del usuario para este grupo no tiene
+    facturación real — confirmado por un 429 "FreeTier" real durante un uso
+    de verdad (extractor/planner), no por una prueba sintética (ver
+    providers/disponibilidad_usuario.py). Alimenta GET /auth/modelos-disponibles
+    para bloquear ese grupo de ahí en adelante, en vez de dejarlo "sin
+    verificar" para siempre."""
+    if not grupo_id:
+        return
+    actuales = dict(usuario.sin_facturacion_confirmada or {})
+    if actuales.get(grupo_id):
+        return
+    actuales[grupo_id] = True
+    usuario.sin_facturacion_confirmada = actuales
+    db.commit()
 
 
 def _api_keys_configuradas(usuario: Usuario) -> ApiKeysConfiguradas:
@@ -273,6 +292,43 @@ def actualizar_api_keys(
         foto_perfil=usuario.foto_perfil,
         api_keys_configuradas=_api_keys_configuradas(usuario),
     )
+
+
+@app.get("/auth/modelos-disponibles")
+async def modelos_disponibles_usuario(usuario: Usuario = Depends(obtener_usuario_actual)):
+    """Para cada API key propia que el usuario tenga guardada, confirma en
+    vivo qué modelos del catálogo puede usar esa key (base del candado en
+    SelectorModelo). Los proveedores sin key propia configurada simplemente
+    no aparecen en la respuesta — el front cae al flag del servidor para esos."""
+    keys = descifrar_api_keys(usuario.api_keys_cifradas)
+    grupos_con_key = [g["id"] for g in grupos_credencial_publicos() if keys.get(g["id"])]
+
+    resultados = await asyncio.gather(
+        *(modelos_disponibles_para_key(grupo_id, keys[grupo_id]) for grupo_id in grupos_con_key),
+        return_exceptions=True,
+    )
+
+    # Grupos con un 429 "FreeTier" REAL ya confirmado (ver _marcar_sin_facturacion
+    # y Usuario.sin_facturacion_confirmada) — ahí "sin verificar" pasa a
+    # bloqueado de verdad, ya no hace falta seguir dudando.
+    sin_facturacion = usuario.sin_facturacion_confirmada or {}
+
+    # return_exceptions=True: si UN proveedor falla por algo inesperado, no se
+    # cae la respuesta entera (eso dejaría a los demás grupos también "sin
+    # candado" en el front, que ante cualquier error de esta llamada cae a
+    # mostrar todo disponible).
+    respuesta: dict[str, dict[str, list[str]]] = {}
+    for grupo_id, resultado in zip(grupos_con_key, resultados):
+        if not isinstance(resultado, tuple):
+            continue
+        confirmados, sin_verificar = resultado
+        if sin_facturacion.get(grupo_id):
+            sin_verificar = set()  # confirmado por uso real: quedan bloqueados, no "sin verificar"
+        respuesta[grupo_id] = {
+            "confirmados": sorted(confirmados),
+            "sin_verificar": sorted(sin_verificar),
+        }
+    return respuesta
 
 
 @app.patch("/auth/nivel", response_model=NivelResponse)
@@ -693,6 +749,7 @@ async def analizar_esquematico(
     imagen: UploadFile = File(...),
     proveedor: str = Form(...),
     usuario: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
 ):
     if proveedor not in PROVEEDORES_VALIDOS:
         raise HTTPException(
@@ -728,6 +785,7 @@ async def analizar_esquematico(
         )
 
     resultado = await ejecutar_extractor(contenido, imagen.content_type, proveedor, api_key_efectiva)
+    _marcar_sin_facturacion(db, usuario, resultado.get("sin_facturacion_grupo"))
 
     if resultado.get("error"):
         raise HTTPException(
@@ -761,6 +819,7 @@ async def planificar_circuito(
     netlist: str = Form(...),
     nivel: str = Form(default="intermedio"),
     usuario: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
 ):
     if proveedor not in PROVEEDORES_VALIDOS:
         raise HTTPException(
@@ -806,6 +865,7 @@ async def planificar_circuito(
     # La IA propone el armado YA redactado con la verbosidad del nivel
     # (agents/planner_agent.py) — sin una segunda llamada de redacción aparte.
     resultado = await ejecutar_planner(estado_extractor)
+    _marcar_sin_facturacion(db, usuario, resultado.get("sin_facturacion_grupo"))
 
     if resultado.get("error"):
         raise HTTPException(
