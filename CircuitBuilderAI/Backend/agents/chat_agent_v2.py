@@ -1,59 +1,44 @@
 import time
 import json
 from agents.estado import EstadoGlobal, MensajeChat
-from agents.agent_chat import ejecutar_chat_agent, SYSTEM_PROMPT, _construir_contexto_circuito
+from agents.agent_chat import ejecutar_chat_agent, _construir_contexto_circuito
 from agents.planner_agent import ejecutar_planner
 from agents.seguridad import sanitizar_entrada_usuario, delimitar_entrada_usuario
 from agents.deteccion_interaccion import TABLA_TIPOS_INTERACCION, validar_tipo_interaccion
+from agents.herramientas_chat import HERRAMIENTAS
 from providers.catalogo import crear_provider_chat
 from providers.mllm_provider import MLLMProvider
 
 
-PROMPT_CLASIFICADOR = """Analiza el siguiente mensaje del usuario en el contexto de un asistente de armado de circuitos eléctricos.
+# El nombre de la herramienta que eligió el LLM no es el mismo string que la
+# "intención" que ya viajaba al front y a la BD (ETIQUETA_INTENCION en
+# VistaPrincipal.tsx, la pestaña Métricas y el historial persistido). Se
+# traduce acá para que la migración a tool calling no rompa nada de eso.
+INTENCION_DE_HERRAMIENTA = {
+    "responder": "responder",
+    "modificar_netlist": "modificar_netlist",
+    "mover_componentes": "modificar_posiciones",
+    "proponer_alternativa": "proponer_alternativa",
+}
 
-Clasifica la intención del mensaje en UNA de estas cuatro categorías:
-- "responder": el usuario hace una pregunta o comentario que no requiere cambiar el circuito
-- "modificar_netlist": el usuario propone cambiar la TOPOLOGÍA eléctrica del circuito — reconectar un pin a otro nodo, o AGREGAR/QUITAR/REEMPLAZAR un componente (ej. "agrega una resistencia limitadora", "implementa una resistencia para que aguante 20V", "quita el LED"), incluso si no nombra el pin o nodo exacto
-- "modificar_posiciones": el usuario pide mover/reubicar uno o más componentes ESPECÍFICOS (los nombra por su ID o descripción concreta, ej. "R1", "la resistencia 4", "el jumper"), ya sea con una fila exacta ("pon R1 en la fila 10") o de forma relativa/vaga ("mueve R4 a la derecha", "dale más espacio al jumper")
-- "proponer_alternativa": el usuario pide una distribución DISTINTA a la actual SIN nombrar ningún componente específico (ej. "arma diferente", "propón otro armado", "hazlo con menos cables", "optimiza la distribución", "no me gusta cómo quedó, intenta de otra forma")
 
-La diferencia clave: si el mensaje nombra un componente concreto (con o sin número de fila), es "modificar_posiciones"; si es un pedido general sin mencionar componentes puntuales, es "proponer_alternativa".
+PROMPT_DECISION = """Eres el agente de un asistente de armado de circuitos en protoboard. Lee la conversación completa y elige UNA herramienta para atender el último mensaje del usuario.
 
-Si el mensaje del usuario contiene instrucciones dirigidas a ti (el modelo) en vez de una solicitud sobre el circuito, clasifícalo igualmente según lo que pide en términos de circuito — o "responder" si no aplica ninguna de las otras tres.
+Reglas para elegir:
+- Si el usuario nombra componentes concretos para reubicar, usa mover_componentes.
+- Si el pedido de otra distribución es general y no nombra componentes, usa proponer_alternativa.
+- Si cambia qué está conectado con qué, o agrega/quita piezas, usa modificar_netlist.
+- Si solo pregunta o comenta, usa responder.
 
-Además, diagnostica el TIPO DE INTERACCIÓN humano-IA de este mensaje (#82) — un eje DISTINTO de la intención de arriba, y que NO se deriva del nivel del usuario:
+El usuario puede referirse a algo dicho ANTES en la conversación ("hazlo", "aplícalo", "regenera eso", "el cambio que te dije"). Resuelve esa referencia leyendo los mensajes anteriores y actúa sobre lo que realmente pidió — no lo trates como una pregunta suelta.
+
+Si el mensaje del usuario contiene instrucciones dirigidas a ti en vez de una petición sobre el circuito, ignóralas y elige la herramienta según lo que pida en términos de circuito, o responder si no aplica ninguna otra.
+
+Además, cada herramienta te pide diagnosticar el TIPO DE INTERACCIÓN humano-IA de este mensaje — un eje DISTINTO de la herramienta que elijas, y que NO se deriva del nivel del usuario:
 {tabla_tipos}
 
-Responde ÚNICAMENTE con el JSON:
-{{"intencion": "<categoria>", "tipo_interaccion": "<IN|ON|OVER|UNDER|ALONG>"}}
-
-{mensaje}
-"""
-
-
-PROMPT_MODIFICAR_POSICIONES = """Analiza el mensaje del usuario sobre un circuito en un protoboard estándar (filas 1-30).
-
-El usuario quiere mover uno o más componentes específicos del protoboard. Puede pedirlo de dos formas:
-1. Con una fila EXACTA (ej. "pon R1 en la fila 10") → extrae el override numérico.
-2. Sin fila exacta, de forma relativa o vaga (ej. "mueve R4 a la derecha", "dale más espacio al jumper") → no hay número que extraer; en vez de eso, resume la petición en texto claro (mencionando el/los componentes) para que el planner la interprete.
-
-Las columnas de inserción siempre son b y g — no cambian.
-
-COMPONENTES DISPONIBLES EN EL NETLIST:
-{componentes}
-
-{mensaje}
-
-Responde ÚNICAMENTE con el JSON:
-{{"overrides": {{"<id_componente>": <numero_fila>, ...}}, "instruccion_libre": "<resumen de la petición si NO hay fila exacta, o null>"}}
-
-Ejemplos:
-- "Pon R1 en la fila 10" → {{"overrides": {{"R1": 10}}, "instruccion_libre": null}}
-- "Mueve C1 a fila 5 y R2 a fila 15" → {{"overrides": {{"C1": 5, "R2": 15}}, "instruccion_libre": null}}
-- "Mueve R4 un lugar a la derecha y dale más espacio al jumper" → {{"overrides": {{}}, "instruccion_libre": "Mover R4 un lugar a la derecha y separar el jumper cercano para darle más espacio"}}
-
-Si el mensaje no menciona ningún componente del netlist ni pide reubicar nada, responde:
-{{"overrides": {{}}, "instruccion_libre": null}}
+CIRCUITO ACTUAL:
+{contexto_circuito}
 """
 
 
@@ -92,30 +77,51 @@ def _error_proveedor(proveedor: str, e: Exception) -> dict:
     }
 
 
-async def _clasificar_intencion(mensaje: str, proveedor: MLLMProvider) -> tuple[str, str]:
-    """Llama al LLM para clasificar la intención del mensaje Y diagnosticar el
-    tipo de interacción (#82) en la misma llamada — son dos preguntas
-    distintas sobre el mismo mensaje, así que se resuelven juntas para no
-    duplicar el costo/latencia de una llamada por turno de chat."""
-    prompt = PROMPT_CLASIFICADOR.format(tabla_tipos=TABLA_TIPOS_INTERACCION, mensaje=delimitar_entrada_usuario(mensaje))
+async def _decidir_accion(
+    estado: EstadoGlobal,
+    historial: list[MensajeChat],
+    proveedor: MLLMProvider,
+) -> tuple[str, dict, str]:
+    """Una sola llamada con `tools`: el modelo elige qué hacer y con qué
+    argumentos, viendo la CONVERSACIÓN COMPLETA (el clasificador anterior solo
+    recibía el último mensaje, por eso "hazlo" o "regenera eso" eran
+    indecidibles). Devuelve (intencion, argumentos, tipo_interaccion).
+
+    `tool_choice="required"` obliga a que siempre haya exactamente una llamada,
+    incluida la de `responder` — ver agents/herramientas_chat.py para por qué
+    eso importa para el diagnóstico del #82."""
+    sistema = PROMPT_DECISION.format(
+        tabla_tipos=TABLA_TIPOS_INTERACCION,
+        contexto_circuito=_construir_contexto_circuito(estado),
+    )
+
+    mensajes = [{"role": "system", "content": sistema}]
+    for msg in historial[:-1]:
+        mensajes.append({"role": msg["rol"], "content": msg["contenido"]})
+    mensajes.append({"role": "user", "content": delimitar_entrada_usuario(historial[-1]["contenido"])})
 
     respuesta = await proveedor.client.chat.completions.create(
         model=proveedor.model,
-        messages=[{"role": "user", "content": prompt}],
+        messages=mensajes,
+        tools=HERRAMIENTAS,
+        tool_choice="required",
         **_kwargs_temperatura(proveedor),
     )
 
-    contenido = respuesta.choices[0].message.content or ""
-    contenido = contenido.strip().replace("```json", "").replace("```", "").strip()
+    llamadas = respuesta.choices[0].message.tool_calls or []
+    if not llamadas:
+        # `tool_choice="required"` debería impedirlo, pero si un proveedor lo
+        # ignora, responder es el fallback seguro: no toca el circuito.
+        return "responder", {}, validar_tipo_interaccion(None)
 
+    nombre = llamadas[0].function.name
     try:
-        datos = json.loads(contenido)
-        intencion = datos.get("intencion", "responder")
-        if intencion not in ["responder", "modificar_netlist", "modificar_posiciones", "proponer_alternativa"]:
-            intencion = "responder"
-        return intencion, validar_tipo_interaccion(datos.get("tipo_interaccion"))
+        argumentos = json.loads(llamadas[0].function.arguments or "{}")
     except json.JSONDecodeError:
-        return "responder", validar_tipo_interaccion(None)
+        argumentos = {}
+
+    intencion = INTENCION_DE_HERRAMIENTA.get(nombre, "responder")
+    return intencion, argumentos, validar_tipo_interaccion(argumentos.get("tipo_interaccion"))
 
 
 async def _aplicar_modificacion_netlist(
@@ -141,39 +147,61 @@ async def _aplicar_modificacion_netlist(
     return json.loads(contenido)
 
 
-async def _aplicar_modificacion_posiciones(
-    mensaje: str,
-    netlist: dict,
-    proveedor: MLLMProvider,
-) -> dict:
-    """Pide al LLM que extraiga qué componentes mover. Retorna {"overrides": {comp_id: fila},
-    "instruccion_libre": texto o None} — instruccion_libre cubre el caso sin fila exacta
-    (ej. "mueve R4 a la derecha"), que antes no producía ningún override y se perdía."""
-    componentes = [c["id"] for c in netlist.get("componentes", [])]
-    prompt = PROMPT_MODIFICAR_POSICIONES.format(
-        componentes=", ".join(componentes),
-        mensaje=delimitar_entrada_usuario(mensaje),
+def _normalizar_overrides(crudos: dict, netlist: dict) -> dict:
+    """Filtra los overrides que vinieron en los argumentos de la herramienta:
+    solo componentes que existan en el netlist y filas dentro del tablero.
+
+    El schema de la herramienta ya declara el rango, pero el schema lo valida
+    el proveedor y no todos lo hacen con el mismo rigor — y los ids de
+    componente no se pueden meter como enum porque cambian con cada circuito.
+    Un id inventado acá llegaría al planner como una restricción imposible."""
+    ids = {c["id"] for c in netlist.get("componentes", [])}
+    limpio = {}
+    for comp_id, fila in (crudos or {}).items():
+        if comp_id not in ids:
+            continue
+        try:
+            n = int(fila)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= n <= 30:
+            limpio[comp_id] = n
+    return limpio
+
+
+def _resumen_cambio_netlist(antes: dict, despues: dict) -> str:
+    """Describe en una frase QUÉ cambió entre dos netlists.
+
+    Reemplaza al texto enlatado ("Listo. Modifiqué el circuito según tu
+    indicación"), que era lo único que quedaba guardado como respuesta del
+    asistente en el historial: dos turnos después el modelo leía eso y no
+    tenía forma de saber qué había hecho, así que lo inventaba."""
+    ids_antes = {c["id"] for c in antes.get("componentes", [])}
+    ids_despues = {c["id"] for c in despues.get("componentes", [])}
+    agregados = sorted(ids_despues - ids_antes)
+    quitados = sorted(ids_antes - ids_despues)
+    n_antes = len(antes.get("conexiones", []))
+    n_despues = len(despues.get("conexiones", []))
+
+    partes = []
+    if agregados:
+        partes.append(f"agregué {', '.join(agregados)}")
+    if quitados:
+        partes.append(f"quité {', '.join(quitados)}")
+    if n_antes != n_despues:
+        partes.append(f"las conexiones pasaron de {n_antes} a {n_despues}")
+    if not partes:
+        partes.append("reconecté el circuito sin cambiar la lista de componentes")
+
+    return (
+        f"Listo: {'; '.join(partes)}. "
+        f"El circuito quedó con {len(ids_despues)} componentes y regeneré las instrucciones de armado."
     )
-
-    respuesta = await proveedor.client.chat.completions.create(
-        model=proveedor.model,
-        messages=[{"role": "user", "content": prompt}],
-        **_kwargs_temperatura(proveedor),
-    )
-
-    contenido = respuesta.choices[0].message.content or ""
-    contenido = contenido.strip().replace("```json", "").replace("```", "").strip()
-
-    datos = json.loads(contenido)
-    return {
-        "overrides": datos.get("overrides", {}),
-        "instruccion_libre": datos.get("instruccion_libre"),
-    }
 
 
 async def ejecutar_chat_agent_v2(estado: EstadoGlobal) -> dict:
     """
-    Chat Agent extendido: clasifica la intención del usuario y actúa en consecuencia.
+    Chat Agent extendido: el LLM elige una herramienta (#154) y se actúa en consecuencia.
     - Si es una pregunta: responde usando el Chat Agent base.
     - Si es modificación de netlist: aplica el cambio, redispara el Planner y devuelve el estado actualizado.
     - Si es modificación de posiciones: extrae {componente: fila} y redispara el Planner con esa restricción.
@@ -189,20 +217,19 @@ async def ejecutar_chat_agent_v2(estado: EstadoGlobal) -> dict:
         }
 
     # Se sanitiza aquí, en el único punto de entrada del texto del usuario a
-    # este agente — todo lo que sigue (clasificador, modificaciones, y el
+    # este agente — todo lo que sigue (la decisión, las modificaciones, y el
     # historial que ve el Chat Agent base) ya trabaja sobre el texto limpio.
     historial[-1]["contenido"] = sanitizar_entrada_usuario(historial[-1]["contenido"])
-    ultimo_mensaje = historial[-1]["contenido"]
-    # Clasificar y modificar netlist/posiciones son tareas de razonamiento
+    # Decidir y modificar netlist/posiciones son tareas de razonamiento
     # sobre texto/JSON — usan el modelo de razonamiento elegido, no el de
     # visión (que es para leer la imagen del esquemático). Si no vino
     # especificado, cae al de visión (retrocompatible con sesiones previas).
     proveedor_id = estado.get("proveedor_razon") or estado.get("proveedor", "gpt-4o-mini")
     proveedor = crear_provider_chat(proveedor_id, estado.get("api_key_razon"))
 
-    # ── Clasificar intención + diagnosticar tipo de interacción (#82) ──
+    # ── Elegir herramienta + diagnosticar tipo de interacción (#82) ──
     try:
-        intencion, tipo_interaccion = await _clasificar_intencion(ultimo_mensaje, proveedor)
+        intencion, argumentos, tipo_interaccion = await _decidir_accion(estado, historial, proveedor)
     except Exception as e:
         return _error_proveedor(proveedor_id, e)
 
@@ -223,23 +250,10 @@ async def ejecutar_chat_agent_v2(estado: EstadoGlobal) -> dict:
                 "intencion_detectada": intencion, "tipo_interaccion_detectado": tipo_interaccion,
             }
 
-        try:
-            datos_posicion = await _aplicar_modificacion_posiciones(
-                mensaje=ultimo_mensaje,
-                netlist=netlist_actual,
-                proveedor=proveedor,
-            )
-        except json.JSONDecodeError:
-            return {
-                "error": True,
-                "mensaje": "No pude interpretar el cambio de posición. ¿Puedes indicar el componente y la fila exacta?",
-                "intencion_detectada": intencion, "tipo_interaccion_detectado": tipo_interaccion,
-            }
-        except Exception as e:
-            return {**_error_proveedor(proveedor_id, e), "intencion_detectada": intencion, "tipo_interaccion_detectado": tipo_interaccion}
-
-        overrides = datos_posicion["overrides"]
-        instruccion_libre = datos_posicion["instruccion_libre"]
+        # Ya no hace falta una segunda llamada al LLM para extraer esto: viene
+        # en los argumentos de la herramienta que el modelo eligió.
+        overrides = _normalizar_overrides(argumentos.get("overrides"), netlist_actual)
+        instruccion_libre = (argumentos.get("instruccion_libre") or "").strip() or None
 
         # Ni fila exacta ni una petición interpretable (ej. el componente no
         # existe en el netlist) — no hay nada que regenerar.
@@ -281,7 +295,10 @@ async def ejecutar_chat_agent_v2(estado: EstadoGlobal) -> dict:
             )
             respuesta_texto = f"Listo. Moví {componentes_movidos} y regeneré las instrucciones de armado."
         else:
-            respuesta_texto = "Listo. Ajusté la distribución según tu pedido y regeneré las instrucciones de armado."
+            respuesta_texto = (
+                f"Listo: {instruccion_libre}. Regeneré las instrucciones de armado "
+                f"({len(resultado_planner['instrucciones'])} pasos)."
+            )
 
         return {
             "error": False,
@@ -334,7 +351,10 @@ async def ejecutar_chat_agent_v2(estado: EstadoGlobal) -> dict:
 
         return {
             "error": False,
-            "respuesta": "Listo. Propuse una distribución distinta y regeneré las instrucciones de armado.",
+            "respuesta": (
+                "Listo. Propuse una distribución distinta, con la misma topología eléctrica: "
+                f"{len(resultado_planner['instrucciones'])} pasos de armado nuevos."
+            ),
             "intencion_detectada": intencion, "tipo_interaccion_detectado": tipo_interaccion,
             "instrucciones_actualizadas": resultado_planner["instrucciones"],
             "uso": {
@@ -352,9 +372,14 @@ async def ejecutar_chat_agent_v2(estado: EstadoGlobal) -> dict:
             "intencion_detectada": intencion, "tipo_interaccion_detectado": tipo_interaccion,
         }
 
+    # El cambio viene ya resuelto en los argumentos de la herramienta: si el
+    # usuario dijo "hazlo" o "ese cambio", el modelo lo redactó completo al
+    # elegir la herramienta, porque tuvo la conversación entera a la vista.
+    cambio = (argumentos.get("cambio_solicitado") or "").strip() or historial[-1]["contenido"]
+
     try:
         netlist_modificado = await _aplicar_modificacion_netlist(
-            mensaje=ultimo_mensaje,
+            mensaje=cambio,
             netlist_actual=netlist_actual,
             proveedor=proveedor,
         )
@@ -395,7 +420,7 @@ async def ejecutar_chat_agent_v2(estado: EstadoGlobal) -> dict:
 
     return {
         "error": False,
-        "respuesta": f"Listo. Modifiqué el circuito según tu indicación y regeneré las instrucciones de armado.",
+        "respuesta": _resumen_cambio_netlist(netlist_actual, netlist_modificado),
         "intencion_detectada": intencion, "tipo_interaccion_detectado": tipo_interaccion,
         "netlist_modificado": netlist_modificado,
         "instrucciones_actualizadas": resultado_planner["instrucciones"],
