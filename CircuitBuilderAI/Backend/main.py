@@ -335,6 +335,17 @@ class SesionRenombrar(BaseModel):
     nombre: str = Field(min_length=1, max_length=200)
 
 
+# Temporizador inicio/fin: el frontend mide todo localmente (Date.now()) y
+# manda el resultado completo de una sola vez al terminar — evita ir
+# sincronizando paso a paso mientras el usuario arma el circuito.
+class SesionFinalizar(BaseModel):
+    tiempo_total_segundos: float
+    # {"1": 12.3, "2": 45.0, ...} — claves string porque así viaja en JSON.
+    tiempo_por_paso: dict[str, float]
+    inicio: datetime | None = None
+    fin: datetime | None = None
+
+
 class ResultadoBusqueda(BaseModel):
     id: str
     nombre: str
@@ -531,6 +542,32 @@ def renombrar_sesion(
         fecha=sesion.fecha,
         modo_detectado=sesion.modo_detectado,
     )
+
+
+@app.post("/sesiones/{sesion_id}/finalizar")
+def finalizar_sesion(
+    sesion_id: str,
+    datos: SesionFinalizar,
+    usuario: Usuario = Depends(obtener_usuario_actual),
+    db: Session = Depends(get_db),
+):
+    """Guarda el tiempo total y el tiempo por paso (botón "Finalizar" del
+    temporizador) en la misma columna JSONB que ya usa la pestaña Métricas
+    (`metricas`) — se agregan estas claves, sin pisar lo que ya había ahí
+    (extractor/planner/chat, ver _persistir_interaccion_chat)."""
+    sesion = _buscar_sesion_del_usuario(db, sesion_id, usuario.id)
+    if sesion is None:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada.")
+
+    m = dict(sesion.metricas or {})
+    m["tiempo_total_segundos"] = datos.tiempo_total_segundos
+    m["tiempo_por_paso"] = datos.tiempo_por_paso
+    m["inicio"] = datos.inicio.isoformat() if datos.inicio else None
+    m["fin"] = datos.fin.isoformat() if datos.fin else None
+    sesion.metricas = m
+    db.commit()
+
+    return {"ok": True}
 
 
 @app.delete("/sesiones/{sesion_id}", status_code=204)
