@@ -27,6 +27,17 @@ export type Uso = {
   tiempo_segundos?: number
   // Solo /chat lo agrega (tiempo total del turno, clasificar + modificar).
   tiempo_total_segundos?: number
+  // Desglose por intento (#95, solo extractor/planner) — uno por cada llamada
+  // al LLM, con su propio costo y si esa propuesta pasó la validación.
+  intentos_detalle?: {
+    numero: number
+    tokens_entrada: number
+    tokens_salida: number
+    tokens_total: number
+    tiempo_segundos: number
+    exito: boolean
+    error?: string | null
+  }[]
 }
 
 export type Netlist = {
