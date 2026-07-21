@@ -339,6 +339,11 @@ function VistaPrincipal({
   sesion, usuario, onNuevo, onCargarSesion, onCerrarSesion, onActualizarUsuario,
 }: Props) {
   const [instrucciones, setInstrucciones] = useState(sesion.instrucciones)
+  // Netlist VIGENTE del circuito. Se siembra con el de la sesión, igual que
+  // `instrucciones`, pero cambia cuando el usuario modifica la topología por
+  // chat. Es el que se le reenvía al backend en cada mensaje: usar
+  // `sesion.netlist` ahí dejaba al modelo con un circuito desactualizado.
+  const [netlist, setNetlist] = useState(sesion.netlist)
   const [configuracionAbierta, setConfiguracionAbierta] = useState(false)
   const total = instrucciones.length
   const [paso, setPaso] = useState(1)
@@ -853,7 +858,7 @@ function VistaPrincipal({
               mensajes={mensajes}
               onMensajes={setMensajes}
               sesionId={sesion.id}
-              netlist={sesion.netlist}
+              netlist={netlist}
               instrucciones={instrucciones}
               proveedor={sesion.proveedor}
               proveedorRazon={sesion.proveedorRazon}
@@ -863,6 +868,7 @@ function VistaPrincipal({
                 marcarTiempoAntes(1)
                 setPaso(1)
               }}
+              onNetlistActualizado={setNetlist}
               onUso={(uso, intencion, tipoInteraccion) => setUsoChat((u) => [...u, { uso, intencion, tipo_interaccion: tipoInteraccion }])}
             />
           )}
@@ -878,7 +884,7 @@ function VistaPrincipal({
             {tab === 'simulacion' ? (
               <Protoboard componentes={componentes} cables={cables} baterias={baterias} escala={escala} />
             ) : tab === 'codigo' ? (
-              <PanelCodigo netlist={sesion.netlist} instrucciones={instrucciones} />
+              <PanelCodigo netlist={netlist} instrucciones={instrucciones} />
             ) : tab === 'metricas' ? (
               <PanelMetricas
                 metricasProceso={sesion.metricasProceso}
@@ -1101,7 +1107,7 @@ function VistaPrincipal({
                 <X size={16} />
               </button>
             </div>
-            <ComponentGallery componentesSesion={sesion.netlist?.componentes ?? []} />
+            <ComponentGallery componentesSesion={netlist?.componentes ?? []} />
           </div>
         </div>
       )}
