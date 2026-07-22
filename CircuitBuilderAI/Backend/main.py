@@ -56,8 +56,13 @@ load_dotenv()
 
 app = FastAPI(title="Paralelo", version="1.0.0")
 
+# Dominio del frontend en producción (Cloudflare Pages) — issue #78. Se lee de
+# env en vez de hardcodearlo para poder cambiar el dominio sin tocar código.
+FRONTEND_URL = os.getenv("FRONTEND_URL")
+
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=[FRONTEND_URL] if FRONTEND_URL else [],
     # En dev, Vite salta de puerto (5173, 5174, …) si el anterior está ocupado,
     # así que aceptamos cualquier puerto de localhost/127.0.0.1 en lugar de fijar uno.
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
