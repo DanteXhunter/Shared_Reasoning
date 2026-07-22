@@ -1,107 +1,131 @@
-import { useState } from 'react'
-import Protoboard from './components/Protoboard'
-import { analizarEsquematico } from './api/analizar'
-import { autoLayout, EJEMPLO_DIVISOR, EJEMPLO_LAMPARA } from './circuit/layout'
-import type { Netlist } from './circuit/types'
+import { useEffect, useState } from 'react'
+import Intro from './ui/Intro'
+import Auth from './ui/Auth'
+import EncuestaNivel from './ui/EncuestaNivel'
+import Bienvenida from './ui/Bienvenida'
+import VistaPrincipal from './ui/VistaPrincipal'
+import ImportarCompartido from './ui/ImportarCompartido'
+import DevApp from './DevApp'
+import type { Sesion, Nivel } from './ui/tipos'
+import { actualizarNivel, alExpirarSesion, borrarToken, obtenerUsuarioActual, type Usuario } from './api/auth'
 
-// Proveedores que el agente extractor del backend soporta.
-const PROVEEDORES = ['openai', 'nemotron', 'llama-vision']
+type Paso = 'intro' | 'auth' | 'encuesta' | 'importar' | 'bienvenida' | 'principal'
 
+// ============================================================
+//  Conmutador raíz:
+//   · UI oficial "Paralelo": Blob se presenta → login/registro →
+//     encuesta de nivel (solo la primera vez, ver #84/#85) →
+//     bienvenida (subir esquemático) → workspace.
+//     (recomendación UX 2026-07-06: Blob antes del login, humaniza
+//     el muro de autenticación — ver CLAUDE.md)
+//   · Modo desarrollo: interfaz de prueba + biblioteca
+//     (botón </>  en el riel, o abrir la app con ?dev en la URL)
+// ============================================================
 function App() {
-  const [imagen, setImagen] = useState<File | null>(null)
-  const [proveedor, setProveedor] = useState('openai')
-  const [netlist, setNetlist] = useState<Netlist | null>(null)
-  const [cargando, setCargando] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [modoDev, setModoDev] = useState(() => new URLSearchParams(window.location.search).has('dev'))
+  // Link de circuito compartido (ver ImportarCompartido.tsx + main.py
+  // /sesiones/compartidas/{token}) — se resuelve una vez, después del login
+  // (y de la encuesta de nivel si hace falta), antes de ir a "bienvenida".
+  const [tokenCompartido] = useState(() => new URLSearchParams(window.location.search).get('compartido'))
+  const [paso, setPaso] = useState<Paso>('intro')
+  const [nivel, setNivel] = useState<Nivel>('intermedio')
+  const [sesion, setSesion] = useState<Sesion | null>(null)
+  // Usuario autenticado (nombre/correo) para el panel de cuenta del sidebar.
+  // Las API keys propias del usuario ahora se guardan cifradas en el backend
+  // (Mi cuenta → API keys propias) — ya no viven en el estado de App.
+  const [usuario, setUsuario] = useState<Usuario | null>(null)
+  // Mientras se confirma si el token guardado sigue siendo válido, no se
+  // muestra nada — evita el parpadeo de "intro" antes de decidir a dónde ir.
+  const [verificandoSesion, setVerificandoSesion] = useState(true)
 
-  const { componentes, cables, nodos } = netlist
-    ? autoLayout(netlist)
-    : { componentes: [], cables: [], nodos: [] }
+  function alAutenticar(usuario: Usuario) {
+    setUsuario(usuario)
+    setNivel(usuario.nivel)
+    // La encuesta se muestra siempre que el nivel no esté confirmado todavía
+    // (primera vez tras el registro, o si se quedó a medias); una vez
+    // confirmado, nunca se vuelve a mostrar. Si venía un link de circuito
+    // compartido, se resuelve antes de "bienvenida" (nunca antes de la encuesta).
+    if (!usuario.nivelConfirmado) setPaso('encuesta')
+    else setPaso(tokenCompartido ? 'importar' : 'bienvenida')
+  }
 
-  async function analizar() {
-    if (!imagen) return
-    setCargando(true)
-    setError(null)
-    setNetlist(null)
+  // Si el token expira o deja de ser válido en cualquier request protegido,
+  // se vuelve a pedir login sin importar en qué pantalla estaba el usuario.
+  useEffect(() => {
+    alExpirarSesion(() => setPaso('auth'))
+  }, [])
+
+  // Al recargar la página: si hay un token guardado y sigue siendo válido,
+  // restaura la sesión sin pedir login de nuevo (no restaura el circuito que
+  // se estaba armando — eso es el #73, persistencia de sesiones).
+  useEffect(() => {
+    obtenerUsuarioActual()
+      .then((usuario) => usuario && alAutenticar(usuario))
+      .finally(() => setVerificandoSesion(false))
+  }, [])
+
+  function cerrarSesion() {
+    borrarToken()
+    setSesion(null)
+    setUsuario(null)
+    setNivel('intermedio')
+    setPaso('auth')
+  }
+
+  async function alElegirNivel(n: Nivel) {
+    setNivel(n)
+    setPaso(tokenCompartido ? 'importar' : 'bienvenida')
     try {
-      const res = await analizarEsquematico(imagen, proveedor)
-      if (res.resultado) setNetlist(res.resultado)
-      else setError(res.mensaje ?? 'El backend no devolvió un netlist.')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Error desconocido')
-    } finally {
-      setCargando(false)
+      await actualizarNivel(n)
+    } catch {
+      // Si falla el guardado remoto, la sesión sigue con el nivel elegido en
+      // memoria; se reintentará marcar como confirmado en el próximo login.
     }
   }
 
-  return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 p-6">
-      <h1 className="text-2xl font-bold text-violet-400 mb-4">
-        CircuitBuilder AI — Interfaz de prueba
-      </h1>
+  if (verificandoSesion) return null
 
-      {/* Controles */}
-      <div className="flex flex-wrap items-center gap-3 mb-4 bg-slate-800 p-4 rounded-xl">
-        <input
-          type="file"
-          accept="image/*"
-          onChange={(e) => setImagen(e.target.files?.[0] ?? null)}
-          className="text-sm"
-        />
-        <select
-          value={proveedor}
-          onChange={(e) => setProveedor(e.target.value)}
-          className="bg-slate-700 rounded px-2 py-1 text-sm"
-        >
-          {PROVEEDORES.map((p) => (
-            <option key={p} value={p}>{p}</option>
-          ))}
-        </select>
-        <button
-          onClick={analizar}
-          disabled={!imagen || cargando}
-          className="px-4 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-500 disabled:opacity-40 text-sm"
-        >
-          {cargando ? 'Analizando…' : 'Analizar esquemático'}
-        </button>
-        <button
-          onClick={() => { setError(null); setNetlist(EJEMPLO_DIVISOR) }}
-          className="px-4 py-1.5 rounded-lg bg-slate-600 hover:bg-slate-500 text-sm"
-        >
-          Ejemplo: divisor
-        </button>
-        <button
-          onClick={() => { setError(null); setNetlist(EJEMPLO_LAMPARA) }}
-          className="px-4 py-1.5 rounded-lg bg-slate-600 hover:bg-slate-500 text-sm"
-        >
-          Ejemplo: lámpara
-        </button>
-      </div>
+  if (modoDev) return <DevApp onVolver={() => setModoDev(false)} />
 
-      {error && (
-        <div className="mb-4 p-3 rounded-lg bg-red-900/40 border border-red-700 text-red-200 text-sm">
-          ⚠️ {error}
-        </div>
-      )}
-
-      <div className="flex flex-wrap gap-6 items-start">
-        {/* Protoboard */}
-        <div className="bg-slate-800 p-4 rounded-xl overflow-auto">
-          <Protoboard componentes={componentes} cables={cables} nodos={nodos} />
-        </div>
-
-        {/* JSON crudo del netlist */}
-        {netlist && (
-          <div className="bg-slate-800 p-4 rounded-xl max-w-md">
-            <h2 className="text-sm uppercase text-slate-400 mb-2">Netlist (JSON del backend)</h2>
-            <pre className="text-xs text-slate-300 overflow-auto max-h-[70vh]">
-              {JSON.stringify(netlist, null, 2)}
-            </pre>
-          </div>
-        )}
-      </div>
-    </div>
+  if (sesion) return (
+    <VistaPrincipal
+      key={sesion.id ?? sesion.nombre}
+      sesion={sesion}
+      usuario={usuario}
+      onNuevo={() => { setSesion(null); setPaso('bienvenida') }}
+      onCargarSesion={setSesion}
+      onCerrarSesion={cerrarSesion}
+      onActualizarUsuario={setUsuario}
+    />
   )
+
+  switch (paso) {
+    case 'intro':
+      return <Intro onContinuar={() => setPaso('auth')} />
+    case 'auth':
+      return <Auth onEntrar={alAutenticar} />
+    case 'encuesta':
+      return <EncuestaNivel onElegir={alElegirNivel} />
+    case 'importar':
+      return (
+        <ImportarCompartido
+          token={tokenCompartido!}
+          nivel={nivel}
+          onListo={setSesion}
+          onOmitir={() => setPaso('bienvenida')}
+        />
+      )
+    case 'bienvenida':
+      return (
+        <Bienvenida
+          nivel={nivel}
+          onListo={setSesion}
+          usuario={usuario}
+          onActualizarUsuario={setUsuario}
+          onCerrarSesion={cerrarSesion}
+        />
+      )
+  }
 }
 
 export default App
