@@ -182,7 +182,7 @@ export function ItemHistorial({
 
   return (
     <div
-      className="group flex items-center rounded-xl transition"
+      className="group flex items-center transition hover:bg-[color-mix(in_srgb,var(--accent)_12%,transparent)]"
       style={activo ? { background: 'var(--accent)' } : undefined}
     >
       <button onClick={onAbrir} className="flex-1 min-w-0 text-left px-3 py-2">

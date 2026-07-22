@@ -797,7 +797,7 @@ function VistaPrincipal({
             /* ---- Historial (misma columna), con búsqueda + renombrar/borrar (#88) ---- */
             <div className="flex-1 min-h-0 flex flex-col gap-2">
               <BuscadorHistorial value={busquedaHistorial} onChange={setBusquedaHistorial} />
-              <div className="flex-1 min-h-0 overflow-y-auto space-y-1">
+              <div className="flex-1 min-h-0 overflow-y-auto flex flex-col divide-y divide-[var(--border)]">
                 <button
                   onClick={() => setVistaChats('conversacion')}
                   className="w-full text-left text-sm px-3 py-2 rounded-xl truncate transition"
@@ -886,16 +886,16 @@ function VistaPrincipal({
           {/* Barra de estadísticas */}
           <div className="h-14 flex items-center gap-10 px-6 shrink-0" style={{ borderTop: '1px solid var(--border)' }}>
             <div>
-              <p className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--ink-soft)' }}>Dificultad</p>
-              <p className="text-sm font-bold">{NOMBRE_NIVEL[sesion.nivel]}</p>
+              <p className="text-xs  tracking-widest font-bold" style={{ color: 'var(--ink-soft)' }}>Dificultad</p>
+              <p className="text-base">{NOMBRE_NIVEL[sesion.nivel]}</p>
             </div>
             <div>
-              <p className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--ink-soft)' }}>Tiempo</p>
-              <p className="text-sm font-bold">{formatTiempo(tiempo)}</p>
+              <p className="text-xs  tracking-widest font-bold" style={{ color: 'var(--ink-soft)' }}>Tiempo</p>
+              <p className="text-base">{formatTiempo(tiempo)}</p>
             </div>
             <div>
-              <p className="text-[10px] uppercase tracking-widest" style={{ color: 'var(--ink-soft)' }}>Interacciones</p>
-              <p className="text-sm font-bold">{interacciones}</p>
+              <p className="text-xs  tracking-widest font-bold" style={{ color: 'var(--ink-soft)' }}>Interacciones</p>
+              <p className="text-base">{interacciones}</p>
             </div>
           </div>
         </main>
@@ -945,7 +945,7 @@ function VistaPrincipal({
             >
               <ArrowLeft size={16} />
             </button>
-            <span className="text-sm font-semibold" style={{ color: 'var(--accent)' }}>
+            <span className="text-base font-semibold" style={{ color: 'var(--accent)' }}>
               Paso {paso} <span style={{ color: 'var(--ink-soft)' }}>de {total}</span>
             </span>
             <button
@@ -986,21 +986,27 @@ function VistaPrincipal({
 
           {instruccionActiva && (
             <>
-              <div>
-                <p className="text-[10px] uppercase tracking-widest mb-2 text-center" style={{ color: 'var(--ink-soft)' }}>Instrucción</p>
-                <p className="text-sm leading-relaxed text-center">{instruccionActiva.descripcion}</p>
+              {/* Card sin borde/tinte de acento (antes era texto plano sin
+                  contorno, se perdía contra el resto del panel) — el peso
+                  bold del texto es lo que ahora lo hace resaltar. */}
+              <div className="rounded-xl p-4" style={{ background: 'var(--bg1)' }}>
+                <p className="text-sm font-bold mb-2 text-center" style={{ color: 'var(--ink)' }}>Instrucción</p>
+                <p className="text-l leading-relaxed text-center ">{instruccionActiva.descripcion}</p>
               </div>
 
-              <div className="grid grid-cols-2 gap-4 items-stretch">
+              {/* Componente(s) y Coordenadas apiladas (antes lado a lado en 2
+                  columnas) — cada una con más espacio propio para que el
+                  contenido se lea más grande, en vez de competir por ancho. */}
+              <div className="flex flex-col gap-4">
                 {instruccionActiva.componente_id ? (
                   <div className="flex flex-col">
-                    <p className="text-[10px] uppercase tracking-widest mb-2 text-center" style={{ color: 'var(--ink-soft)' }}>Componente(s)</p>
-                    <div className="rounded-xl p-3 flex-1 min-h-[124px] flex flex-col items-center justify-center gap-1" style={{ background: 'var(--bg1)' }}>
+                    <p className="text-sm font-bold mb-2 text-center" style={{ color: 'var(--ink)' }}>Componente</p>
+                    <div className="rounded-xl p-4 min-h-[140px] flex flex-col items-center justify-center gap-2" style={{ background: 'var(--bg1)' }}>
                       <MiniComponente
                         kind={normalizarTipo(instruccionActiva.componente_tipo ?? '')}
                         valor={instruccionActiva.componente_valor ?? undefined}
                       />
-                      <span className="text-sm font-semibold">
+                      <span className="text-base">
                         {instruccionActiva.componente_id}
                         {instruccionActiva.componente_valor ? ` ${instruccionActiva.componente_valor}` : ''}
                       </span>
@@ -1010,10 +1016,10 @@ function VistaPrincipal({
                   // El jumper también es un componente (§7.B): en este paso hay
                   // que saber qué color de cable tomar, no solo a dónde va.
                   <div className="flex flex-col">
-                    <p className="text-[10px] uppercase tracking-widest mb-2 text-center" style={{ color: 'var(--ink-soft)' }}>Componente(s)</p>
-                    <div className="rounded-xl p-3 flex-1 min-h-[124px] flex flex-col items-center justify-center gap-1" style={{ background: 'var(--bg1)' }}>
+                    <p className="text-sm font-bold mb-2 text-center" style={{ color: 'var(--ink)' }}>Componente</p>
+                    <div className="rounded-xl p-4 min-h-[140px] flex flex-col items-center justify-center gap-2" style={{ background: 'var(--bg1)' }}>
                       <MiniCable color={colorCable(instruccionActiva.cable.color)} />
-                      <span className="text-sm font-semibold capitalize">
+                      <span className="text-base capitalize">
                         Jumper {instruccionActiva.cable.color}
                       </span>
                     </div>
@@ -1021,12 +1027,12 @@ function VistaPrincipal({
                 ) : null}
 
                 <div className="flex flex-col">
-                  <p className="text-[10px] uppercase tracking-widest mb-2 text-center" style={{ color: 'var(--ink-soft)' }}>Coordenadas</p>
-                  <div className="rounded-xl p-3 flex-1 min-h-[124px] flex items-center justify-center gap-2 flex-wrap" style={{ background: 'var(--bg1)' }}>
+                  <p className="text-sm font-bold mb-2 text-center" style={{ color: 'var(--ink)' }}>Coordenadas</p>
+                  <div className="rounded-xl p-4 min-h-[100px] flex items-center justify-center gap-2 flex-wrap" style={{ background: 'var(--bg1)' }}>
                     {(instruccionActiva.pines ?? (instruccionActiva.cable ? [instruccionActiva.cable.desde, instruccionActiva.cable.hasta] : []))
                       .map((p, i, arr) => (
                         <span key={i} className="flex items-center gap-1.5">
-                          <span className="px-2 py-1 rounded-lg font-mono font-semibold text-xs" style={{ background: 'var(--accent)', color: 'var(--bg2)' }}>
+                          <span className="px-2.5 py-1.5 rounded-lg font-mono text-sm" style={{ background: 'var(--accent)', color: 'var(--bg2)' }}>
                             {coordTexto(p.fila, p.columna)}
                           </span>
                           {i < arr.length - 1 && <span style={{ color: 'var(--ink-soft)' }}>→</span>}
