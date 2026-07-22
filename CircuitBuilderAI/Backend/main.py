@@ -40,6 +40,7 @@ from providers.catalogo import (
 )
 from providers.cifrado_keys import cifrar_api_keys, descifrar_api_keys
 from providers.disponibilidad_usuario import modelos_disponibles_para_key
+from biblioteca_esquematicos import listar_biblioteca
 from rate_limit import (
     verificar_frecuencia,
     FRECUENCIA_AUTH,
@@ -108,6 +109,14 @@ async def proveedores():
         # Campos de API key propia que el front debe ofrecer (uno por proveedor).
         "grupos_credencial": grupos_credencial_publicos(),
     }
+
+
+@app.get("/biblioteca-esquematicos")
+async def biblioteca_esquematicos():
+    """Esquemáticos de ejemplo por dificultad (Supabase Storage), para elegir
+    uno en vez de subir el propio (ver Bienvenida.tsx). Público por la misma
+    razón que /proveedores: no expone nada sensible."""
+    return await listar_biblioteca()
 
 
 def _ip_de(request: Request) -> str:
