@@ -13,7 +13,10 @@ from db.database import Base
 import db.models  # noqa: F401 — registra los modelos en Base.metadata
 
 config = context.config
-config.set_main_option("sqlalchemy.url", os.getenv("DATABASE_URL"))
+# configparser trata "%" como inicio de interpolación (%(nombre)s); si la
+# password de DATABASE_URL viene percent-encoded (ej. %40, %5E) hay que
+# escaparlo a "%%" o Alembic truena al leer sqlalchemy.url.
+config.set_main_option("sqlalchemy.url", os.getenv("DATABASE_URL", "").replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
