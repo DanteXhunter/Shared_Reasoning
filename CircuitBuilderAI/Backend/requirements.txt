@@ -13,3 +13,4 @@ argon2-cffi
 pyjwt
 pydantic[email]
 cryptography
+httpx
