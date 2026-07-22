@@ -43,7 +43,19 @@ class EstadoGlobal(TypedDict):
     imagen_base64: str
     mime_type: str
     proveedor: str
+    # Modelo para tareas de razonamiento (planner + chat: clasificar, modificar
+    # netlist/posiciones, responder) — separado del `proveedor` de visión, que
+    # solo usa el extractor. Ver providers/catalogo.py (roles "vision"/"razon").
+    proveedor_razon: str
+    # API key propia del usuario para cada slot (opcional). Si viene vacía,
+    # se usa la del servidor (ver providers/catalogo.py api_key_de). Nunca se
+    # persiste — solo viaja en la petición.
+    api_key: str
+    api_key_razon: str
     modo_interaccion: ModoInteraccion
+    # basico | intermedio | experto — controla CUÁNTO explica la IA (§8: nivel
+    # ≠ tipo de interacción). Ver agents/verbosidad.py.
+    nivel: str
 
     # Historial de chat
     historial_chat: list[MensajeChat]
@@ -67,3 +79,18 @@ class EstadoGlobal(TypedDict):
     planner_tokens_entrada: int
     planner_tokens_salida: int
     planner_tiempo: float
+    # Desglose por intento (#95): uno por cada vez que nodo_planificar llamó
+    # al LLM, con su propio costo y si esa propuesta pasó la validación o no.
+    planner_intentos_detalle: list[dict]
+    planner_posiciones_override: Optional[dict]  # {comp_id: fila} — sobrescribe calcular_posiciones()
+    # Distribución previa a NO repetir (pedido abierto "arma diferente" — ver
+    # agents/chat_agent_v2.py intención "proponer_alternativa"). Es la misma
+    # lista que ya vive en planner_instrucciones; se pasa aparte porque solo
+    # aplica a esa intención, no a cada corrida del planner.
+    planner_layout_previo: Optional[list[dict]]
+    # Petición de reubicación en lenguaje natural, sin fila exacta (ej. "mueve
+    # R4 a la derecha y dale más espacio al jumper") — ver
+    # agents/chat_agent_v2.py _aplicar_modificacion_posiciones. Se pasa como
+    # restricción al planner igual que planner_posiciones_override, pero sin
+    # forzar un número de fila que el usuario nunca dio.
+    planner_restriccion_libre: Optional[str]

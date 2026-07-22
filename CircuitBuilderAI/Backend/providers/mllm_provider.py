@@ -8,19 +8,24 @@ import base64
 
 load_dotenv()
 
-MODELOS = {
-    "openai": "gpt-4o-mini",
-}
 
-
-class OpenAIProvider(LLMProvider):
-    def __init__(self, variante: str = "openai"):
+class MLLMProvider(LLMProvider):
+    def __init__(
+        self,
+        model: str = "gpt-4o-mini",
+        base_url: str | None = None,
+        api_key: str | None = None,
+    ):
+        # base_url permite reutilizar este provider con cualquier endpoint
+        # compatible con /v1/chat/completions (Gemini, NVIDIA NIM, etc.) sin
+        # duplicar la clase — ver CLAUDE.md §7.
         self.client = AsyncOpenAI(
-            api_key=os.getenv("OPENAI_API_KEY"),
+            api_key=api_key or os.getenv("OPENAI_API_KEY"),
+            base_url=base_url,
             timeout=30.0,
             max_retries=0,
         )
-        self.model = MODELOS.get(variante, "gpt-4o-mini")
+        self.model = model
         self.tokens_consumidos_sesion = 0
 
     async def analizar_esquematico(self, imagen_bytes: bytes, mime_type: str) -> dict:
@@ -80,11 +85,11 @@ class OpenAIProvider(LLMProvider):
                         ],
                     }
                 ],
+                response_format={"type": "json_object"},
             )
             tokens_esta_llamada = response.usage.total_tokens
             self.tokens_consumidos_sesion += tokens_esta_llamada
             texto_raw = response.choices[0].message.content or ""
-            print(f"RESPUESTA CRUDA DEL MODELO: {texto_raw}")
             texto = texto_raw.strip().replace("```json", "").replace("```", "").strip()
             return {
                 "resultado": json.loads(texto),
