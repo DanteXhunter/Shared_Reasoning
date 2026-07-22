@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { ImageUp, Sun, Moon } from 'lucide-react'
+import { ImageUp, Sun, Moon, Library } from 'lucide-react'
 import { analizarEsquematico } from '../api/analizar'
 import { planificarCircuito } from '../api/planificar'
 import { crearSesion, abrirSesion } from '../api/sesiones'
 import { type Usuario, obtenerModelosDisponibles, type ModelosDisponiblesUsuario } from '../api/auth'
+import { obtenerBiblioteca, type Biblioteca, type Dificultad } from '../api/biblioteca'
 import PanelUsuario from './PanelUsuario'
 import TemaProvider, { type Tema } from './theme'
 import { LogoWordmark } from './Logo'
@@ -102,6 +103,38 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
     if (file && file.type.startsWith('image/')) {
       setImagen(file)
       setError(null)
+    }
+  }
+
+  // Biblioteca de esquemáticos de ejemplo (Supabase Storage), catalogados
+  // por dificultad — alternativa a subir el propio. Se pide una sola vez al
+  // montar, es pública y liviana (una decena de imágenes).
+  const [origenImagen, setOrigenImagen] = useState<'subir' | 'biblioteca'>('subir')
+  const [biblioteca, setBiblioteca] = useState<Biblioteca | null>(null)
+  const [dificultadActiva, setDificultadActiva] = useState<Dificultad>('facil')
+  const [cargandoElegida, setCargandoElegida] = useState(false)
+
+  useEffect(() => {
+    obtenerBiblioteca().then(setBiblioteca).catch(() => setBiblioteca(null))
+  }, [])
+
+  // Trae la imagen elegida de la biblioteca y la mete al mismo flujo que un
+  // archivo subido a mano (recibirArchivo) — de ahí en adelante no hay
+  // distinción entre "subida" o "de biblioteca", es solo un File más.
+  async function elegirDeBiblioteca(item: { nombre: string; url: string }) {
+    setCargandoElegida(true)
+    setError(null)
+    try {
+      const res = await fetch(item.url)
+      if (!res.ok) throw new Error('No se pudo cargar esa imagen.')
+      const blob = await res.blob()
+      const extension = blob.type.split('/')[1] ?? 'png'
+      recibirArchivo(new File([blob], `${item.nombre}.${extension}`, { type: blob.type }))
+      setOrigenImagen('subir') // vuelve a la vista normal, ahora con el preview ya elegido
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo cargar esa imagen.')
+    } finally {
+      setCargandoElegida(false)
     }
   }
 
@@ -272,31 +305,104 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
           ) : (
             /* ---- Formulario principal ---- */
             <div className="panel rounded-2xl p-6 space-y-4">
-              {/* Zona de subida (click o arrastrar) */}
-              <div
-                onClick={() => inputRef.current?.click()}
-                onDragOver={(e) => { e.preventDefault(); setArrastrando(true) }}
-                onDragLeave={() => setArrastrando(false)}
-                onDrop={(e) => { e.preventDefault(); setArrastrando(false); recibirArchivo(e.dataTransfer.files?.[0]) }}
-                className="rounded-xl border-2 border-dashed cursor-pointer grid place-items-center min-h-48 p-4 transition"
-                style={{ borderColor: arrastrando ? 'var(--accent)' : 'var(--border)', background: arrastrando ? 'color-mix(in srgb, var(--accent) 10%, transparent)' : 'var(--bg1)' }}
-              >
-                <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={(e) => recibirArchivo(e.target.files?.[0])} />
-                {preview ? (
-                  <div className="flex items-center gap-4">
-                    <img src={preview} alt="Esquemático" className="max-h-28 rounded-lg" />
-                    <div className="text-sm">
-                      <p className="font-medium">{imagen?.name}</p>
-                      <p className="text-xs mt-1" style={{ color: 'var(--ink-soft)' }}>Haz clic para cambiar la imagen</p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-center">
-                    <ImageUp size={28} className="mx-auto mb-2" style={{ color: 'var(--ink-soft)' }} />
-                    <p className="text-sm font-medium">Arrastra o elige tu esquemático</p>
-                  </div>
-                )}
+              {/* Origen del esquemático: subida propia o biblioteca de ejemplo */}
+              <div className="flex gap-1 rounded-lg p-1 w-fit" style={{ background: 'var(--bg2)' }}>
+                <button
+                  type="button"
+                  onClick={() => setOrigenImagen('subir')}
+                  className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition"
+                  style={{
+                    background: origenImagen === 'subir' ? 'var(--bg1)' : 'transparent',
+                    color: origenImagen === 'subir' ? 'var(--ink)' : 'var(--ink-soft)',
+                  }}
+                >
+                  <ImageUp size={13} />
+                  Subir la mía
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOrigenImagen('biblioteca')}
+                  className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition"
+                  style={{
+                    background: origenImagen === 'biblioteca' ? 'var(--bg1)' : 'transparent',
+                    color: origenImagen === 'biblioteca' ? 'var(--ink)' : 'var(--ink-soft)',
+                  }}
+                >
+                  <Library size={13} />
+                  Elegir de biblioteca
+                </button>
               </div>
+
+              {origenImagen === 'subir' ? (
+                /* Zona de subida (click o arrastrar) */
+                <div
+                  onClick={() => inputRef.current?.click()}
+                  onDragOver={(e) => { e.preventDefault(); setArrastrando(true) }}
+                  onDragLeave={() => setArrastrando(false)}
+                  onDrop={(e) => { e.preventDefault(); setArrastrando(false); recibirArchivo(e.dataTransfer.files?.[0]) }}
+                  className="rounded-xl border-2 border-dashed cursor-pointer grid place-items-center min-h-48 p-4 transition"
+                  style={{ borderColor: arrastrando ? 'var(--accent)' : 'var(--border)', background: arrastrando ? 'color-mix(in srgb, var(--accent) 10%, transparent)' : 'var(--bg1)' }}
+                >
+                  <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={(e) => recibirArchivo(e.target.files?.[0])} />
+                  {preview ? (
+                    <div className="flex items-center gap-4">
+                      <img src={preview} alt="Esquemático" className="max-h-28 rounded-lg" />
+                      <div className="text-sm">
+                        <p className="font-medium">{imagen?.name}</p>
+                        <p className="text-xs mt-1" style={{ color: 'var(--ink-soft)' }}>Haz clic para cambiar la imagen</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-center">
+                      <ImageUp size={28} className="mx-auto mb-2" style={{ color: 'var(--ink-soft)' }} />
+                      <p className="text-sm font-medium">Arrastra o elige tu esquemático</p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Biblioteca de esquemáticos de ejemplo, por dificultad */
+                <div className="rounded-xl p-3 min-h-48" style={{ border: '1px solid var(--border)', background: 'var(--bg1)' }}>
+                  <div className="flex gap-1 mb-3">
+                    {(['facil', 'intermedio', 'dificil'] as Dificultad[]).map((d) => (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => setDificultadActiva(d)}
+                        className="rounded-lg px-2.5 py-1 text-xs font-medium capitalize transition"
+                        style={{
+                          background: dificultadActiva === d ? 'var(--accent)' : 'var(--bg2)',
+                          color: dificultadActiva === d ? 'var(--bg2)' : 'var(--ink-soft)',
+                        }}
+                      >
+                        {d}
+                      </button>
+                    ))}
+                  </div>
+
+                  {!biblioteca ? (
+                    <p className="text-xs text-center py-8" style={{ color: 'var(--ink-soft)' }}>Cargando biblioteca…</p>
+                  ) : biblioteca[dificultadActiva].length === 0 ? (
+                    <p className="text-xs text-center py-8" style={{ color: 'var(--ink-soft)' }}>Sin ejemplos en esta dificultad todavía.</p>
+                  ) : (
+                    <div className="grid grid-cols-3 gap-2 max-h-40 overflow-y-auto">
+                      {biblioteca[dificultadActiva].map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => elegirDeBiblioteca(item)}
+                          disabled={cargandoElegida}
+                          className="rounded-lg overflow-hidden transition hover:brightness-95 disabled:opacity-40"
+                          style={{ border: '1px solid var(--border)' }}
+                          title={item.nombre}
+                        >
+                          <img src={item.url} alt={item.nombre} className="w-full h-16 object-cover" style={{ background: 'var(--bg2)' }} />
+                          <span className="block text-[10px] px-1 py-1 truncate">{item.nombre}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Prompt opcional */}
               <textarea
