@@ -1,5 +1,5 @@
-import { useRef, useState } from 'react'
-import { LogOut, X, Check, Upload, Trash2 } from 'lucide-react'
+import { useRef, useState, type ReactNode } from 'react'
+import { LogOut, X, Check, Upload, Trash2, ChevronDown } from 'lucide-react'
 import { actualizarPerfil, cambiarContrasena, type Usuario } from '../api/auth'
 import Avatar from './Avatar'
 import ConfiguracionApiKeys from './ConfiguracionApiKeys'
@@ -92,6 +92,13 @@ export function ModalCuenta({
   const [confirmarNueva, setConfirmarNueva] = useState('')
   const [avisoPass, setAvisoPass] = useState<Aviso>(null)
   const [guardandoPass, setGuardandoPass] = useState(false)
+
+  // Perfil y contraseña empiezan colapsados (#pulido-mi-cuenta) — la mayoría
+  // de las visitas a "Mi cuenta" son para revisar/quitar API keys, no para
+  // editar nombre/correo/contraseña, así que esos dos formularios no
+  // necesitan ocupar espacio de entrada por default.
+  const [perfilAbierto, setPerfilAbierto] = useState(false)
+  const [passAbierto, setPassAbierto] = useState(false)
 
   const emailValido = EMAIL_REGEX.test(email.trim())
   const perfilCambiado = nombre.trim() !== usuario.nombre || email.trim() !== usuario.email
@@ -259,8 +266,7 @@ export function ModalCuenta({
         <div style={{ borderTop: '1px solid var(--border)' }} />
 
         {/* ---- Perfil: nombre + correo ---- */}
-        <section className="space-y-3">
-          <p className="text-xs uppercase tracking-widest" style={{ color: 'var(--ink-soft)' }}>Perfil</p>
+        <Acordeon titulo="Cambiar nombre o correo" abierto={perfilAbierto} onToggle={() => setPerfilAbierto((v) => !v)}>
           <Campo etiqueta="Nombre" value={nombre} onChange={setNombre} />
           <Campo etiqueta="Correo" value={email} onChange={setEmail} type="email" />
           {email.trim() && !emailValido && (
@@ -274,13 +280,12 @@ export function ModalCuenta({
           >
             {guardandoPerfil ? 'Guardando…' : 'Guardar cambios'}
           </button>
-        </section>
+        </Acordeon>
 
         <div style={{ borderTop: '1px solid var(--border)' }} />
 
         {/* ---- Contraseña ---- */}
-        <section className="space-y-3">
-          <p className="text-xs uppercase tracking-widest" style={{ color: 'var(--ink-soft)' }}>Contraseña</p>
+        <Acordeon titulo="Cambiar contraseña" abierto={passAbierto} onToggle={() => setPassAbierto((v) => !v)}>
           <Campo etiqueta="Contraseña actual" value={actual} onChange={setActual} type="password" />
           <Campo etiqueta="Nueva contraseña" value={nueva} onChange={setNueva} type="password" />
           <Campo etiqueta="Confirmar nueva contraseña" value={confirmarNueva} onChange={setConfirmarNueva} type="password" />
@@ -299,7 +304,7 @@ export function ModalCuenta({
           >
             {guardandoPass ? 'Cambiando…' : 'Cambiar contraseña'}
           </button>
-        </section>
+        </Acordeon>
 
         <div style={{ borderTop: '1px solid var(--border)' }} />
 
@@ -321,6 +326,38 @@ export function ModalCuenta({
         </button>
       </div>
     </div>
+  )
+}
+
+// Sección desplegable — colapsada por default para ahorrar espacio vertical
+// (#pulido-mi-cuenta): el título hace de pregunta ("¿Cambiar contraseña?"),
+// clic para abrir el formulario real.
+function Acordeon({
+  titulo,
+  abierto,
+  onToggle,
+  children,
+}: {
+  titulo: string
+  abierto: boolean
+  onToggle: () => void
+  children: ReactNode
+}) {
+  return (
+    <section>
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between py-1 text-left"
+      >
+        <span className="text-sm font-semibold">{titulo}</span>
+        <ChevronDown
+          size={16}
+          className="transition-transform shrink-0"
+          style={{ color: 'var(--ink-soft)', transform: abierto ? 'none' : 'rotate(-90deg)' }}
+        />
+      </button>
+      {abierto && <div className="space-y-3 pt-3">{children}</div>}
+    </section>
   )
 }
 

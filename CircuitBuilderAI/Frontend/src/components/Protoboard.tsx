@@ -239,6 +239,29 @@ function Protoboard({ componentes = [], cables = [], nodos = [], baterias = [], 
   const [pos, setPos] = useState({ x: 0, y: 0 })
   const [acento, setAcento] = useState(ACCENT_FALLBACK)
   const escalaEfectiva = escala * zoom
+  // Tooltip al pasar el mouse sobre un componente: qué es, sin tener que
+  // adivinarlo por su dibujo. x/y son la posición del puntero relativa al
+  // contenedor (lo que ya da getPointerPosition — no hace falta deshacer el
+  // pan/zoom del Stage, porque el puntero ya viene en pixeles de pantalla).
+  const [hover, setHover] = useState<{ label: string; x: number; y: number } | null>(null)
+
+  function entrarComponente(e: Konva.KonvaEventObject<MouseEvent>, label: string) {
+    const stage = e.target.getStage()
+    const pointer = stage?.getPointerPosition()
+    if (stage) stage.container().style.cursor = 'pointer'
+    if (pointer) setHover({ label, x: pointer.x, y: pointer.y })
+  }
+
+  function moverEnComponente(e: Konva.KonvaEventObject<MouseEvent>, label: string) {
+    const pointer = e.target.getStage()?.getPointerPosition()
+    if (pointer) setHover({ label, x: pointer.x, y: pointer.y })
+  }
+
+  function salirComponente(e: Konva.KonvaEventObject<MouseEvent>) {
+    const stage = e.target.getStage()
+    if (stage) stage.container().style.cursor = 'default'
+    setHover(null)
+  }
 
   // Resuelve el color de acento del TEMA ACTIVO (día/noche) desde la
   // variable CSS --accent. Konva dibuja en <canvas>, que no entiende
@@ -398,7 +421,13 @@ function Protoboard({ componentes = [], cables = [], nodos = [], baterias = [], 
             (ComponenteOrientado los rota para que se vean como en la Biblioteca) */}
         {componentes.map((comp) => {
           return (
-            <Group key={comp.id} opacity={opacidadDe(comp.estado)}>
+            <Group
+              key={comp.id}
+              opacity={opacidadDe(comp.estado)}
+              onMouseEnter={(e) => entrarComponente(e, comp.label)}
+              onMouseMove={(e) => moverEnComponente(e, comp.label)}
+              onMouseLeave={salirComponente}
+            >
               {comp.kind === 'ic' ? (
                 // El IC no usa el patrón de patas: se dibuja como caja con pines.
                 <IC x={Math.min(comp.x1, comp.x2)} y={Math.min(comp.y1, comp.y2) - 18} width={Math.abs(comp.x2 - comp.x1) || 60} label={comp.id} />
@@ -451,6 +480,23 @@ function Protoboard({ componentes = [], cables = [], nodos = [], baterias = [], 
         })}
       </Layer>
     </Stage>
+    {/* Tooltip del componente bajo el mouse — HTML encima del canvas (no
+        Konva.Text) para que se vea nítido y no se deforme con el zoom del
+        Stage. pointer-events-none: si no, robaría el hover al propio canvas
+        y el onMouseLeave del Group nunca se dispararía. */}
+    {hover && (
+      <div
+        className="absolute z-20 pointer-events-none px-2 py-1 rounded-lg text-xs font-semibold shadow-lg whitespace-nowrap"
+        style={{
+          left: hover.x + 14,
+          top: hover.y + 14,
+          background: 'var(--accent)',
+          color: 'var(--bg2)',
+        }}
+      >
+        {hover.label}
+      </div>
+    )}
     {/* Controles de zoom nativo de Konva (no el zoom del navegador) */}
     <div className="absolute bottom-2 right-2 flex flex-col gap-1 z-10">
       <button onClick={() => zoomHacia(ZOOM_STEP)} className="grid place-items-center w-7 h-7 rounded-md shadow" style={botonZoomStyle} title="Acercar">

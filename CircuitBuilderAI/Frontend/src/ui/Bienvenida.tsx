@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ImageUp, Plus, Sun, Moon } from 'lucide-react'
+import { ImageUp, Sun, Moon } from 'lucide-react'
 import { analizarEsquematico } from '../api/analizar'
 import { planificarCircuito } from '../api/planificar'
 import { crearSesion, abrirSesion } from '../api/sesiones'
@@ -189,23 +189,9 @@ function Bienvenida({ onListo, nivel, usuario, onActualizarUsuario, onCerrarSesi
       <aside className="hidden md:flex w-64 flex-col shrink-0 p-4 gap-3" style={{ borderRight: '1px solid var(--border)' }}>
         <span className="text-sm font-semibold mb-1">Chats</span>
 
-        {/* Nuevo chat: acción, no una conversación existente — sin resaltado de "seleccionado" */}
-        <button
-          className="flex items-center gap-3 px-3 py-2 rounded-xl transition hover:brightness-95"
-          style={{ border: '1px solid var(--border)' }}
-        >
-          <span
-            className="grid place-items-center w-7 h-7 rounded-full shrink-0"
-            style={{ background: 'color-mix(in srgb, var(--ink) 12%, transparent)' }}
-          >
-            <Plus size={15} />
-          </span>
-          <span className="text-sm font-medium">Nuevo chat</span>
-        </button>
-
         <BuscadorHistorial value={busqueda} onChange={setBusqueda} />
 
-        <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-1">
+        <div className="flex-1 min-h-0 overflow-y-auto flex flex-col divide-y divide-[var(--border)]">
           {historial.length === 0 ? (
             <span className="text-xs px-3 py-2" style={{ color: 'var(--ink-soft)' }}>
               {busqueda.trim() ? 'Sin resultados.' : 'Aún no tienes circuitos guardados.'}
