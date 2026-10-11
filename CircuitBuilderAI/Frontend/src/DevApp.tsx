@@ -81,7 +81,7 @@ function DevApp({ onVolver }: { onVolver: () => void }) {
         <span className="grid place-items-center w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 shadow-lg shadow-violet-900/40 text-lg">⚡</span>
         <div>
           <h1 className="text-xl font-bold bg-gradient-to-r from-violet-300 to-indigo-300 bg-clip-text text-transparent">
-            CircuitBuilder AI
+            Paralelo
           </h1>
           <p className="text-xs text-slate-500">Modo desarrollo · analizar → planificar → graficar</p>
         </div>
